@@ -1,18 +1,23 @@
-# Smart Job Tracker
+# HireSwipe
 
-A full-stack job application tracking and career management system.
+A full-stack recruitment and career management platform that helps candidates find suitable job opportunities and helps recruiters find the right candidates.
 
 ## Project Overview
 
-Smart Job Tracker is designed to help users organize and manage their job applications, track application progress, analyze job requirements, and gain useful insights into their job search.
+HireSwipe is designed to simplify the recruitment process by connecting candidates and recruiters through a centralized platform.
+
+Candidates can create profiles, search and apply for jobs, track their applications, and receive job recommendations based on their skills and experience.
+
+Recruiters can create company profiles, post job opportunities, manage applications, and track candidates throughout the recruitment process.
 
 ## Planned Technology Stack
 
 - Python
 - FastAPI
 - React
-- SQLite
+- PostgreSQL
 - SQLAlchemy
+- Alembic
 - Git & GitHub
 
 ## Author
