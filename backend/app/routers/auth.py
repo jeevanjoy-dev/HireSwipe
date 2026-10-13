@@ -1,14 +1,9 @@
-import os
-from datetime import datetime, timedelta, timezone
-
-from dotenv import load_dotenv
-from jose import jwt
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import RegisterRequest, LoginRequest
+from app.schemas.auth import RegisterRequest, LoginRequest,TokenResponse,UserResponse
 from app.dependencies.security import (hash_password,verify_password,create_access_token)
 from app.dependencies.auth import get_current_user
 
@@ -17,41 +12,8 @@ router = APIRouter(
     prefix="/auth",
     tags=["Authentication"]
 )
-load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(
-    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
-)
-
-def create_access_token(data: dict):
-    """Create a JWT access token.
-
-    Args:
-        data: Data to store inside the JWT payload.
-
-    Returns:
-        str: Encoded JWT access token.
-    """
-    to_encode = data.copy()
-
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
-
-    to_encode.update({"exp": expire})
-
-    encoded_jwt = jwt.encode(
-        to_encode,
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
-
-    return encoded_jwt
-
-
-@router.post("/register")
+@router.post("/register",response_model=UserResponse)
 def register_user(
     user_data: RegisterRequest,
     db: Session = Depends(get_db)
@@ -92,16 +54,10 @@ def register_user(
     db.commit()
     db.refresh(new_user)
 
-    return {
-        "message": "User registered successfully.",
-        "user_id": new_user.id
-    }
+    return new_user
 
 
-
-
-
-@router.post("/login")
+@router.post("/login", response_model=TokenResponse)
 def login_user(
     user_data: LoginRequest,
     db: Session = Depends(get_db)
@@ -151,7 +107,7 @@ def login_user(
         "token_type": "bearer"
     }
 
-@router.get("/me")
+@router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     """Return the details of the currently authenticated user.
 
