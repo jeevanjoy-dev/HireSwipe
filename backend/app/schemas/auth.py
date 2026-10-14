@@ -1,6 +1,7 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr,ConfigDict
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 class RegisterRequest(BaseModel):
     """Represent the data required to register a new user.
@@ -15,8 +16,7 @@ class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
-    role: str
-
+    role: Literal["candidate", "recruiter", "admin"]
 
 class LoginRequest(BaseModel):
     """Represent the credentials required for user login.
