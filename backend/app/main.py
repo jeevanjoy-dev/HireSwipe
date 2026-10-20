@@ -1,5 +1,9 @@
 from fastapi import FastAPI
+import app.models
 from app.routers import auth
+from app.routers import candidate
+from app.routers import recruiter
+from app.routers import company
 
 
 
@@ -10,6 +14,12 @@ app = FastAPI(
 )
 
 app.include_router(auth.router)
+
+app.include_router(candidate.router)
+
+app.include_router(recruiter.router)
+
+app.include_router(company.router)
 
 
 
