@@ -47,3 +47,9 @@ class RecruiterProfile(Base):
         "Company",
         back_populates="recruiters"
     )
+
+    jobs = relationship(
+      "Job",
+      back_populates="recruiter"
+
+    )

@@ -4,6 +4,7 @@ from app.routers import auth
 from app.routers import candidate
 from app.routers import recruiter
 from app.routers import company
+from app.routers import job
 
 
 
@@ -20,6 +21,8 @@ app.include_router(candidate.router)
 app.include_router(recruiter.router)
 
 app.include_router(company.router)
+
+app.include_router(job.router)
 
 
 

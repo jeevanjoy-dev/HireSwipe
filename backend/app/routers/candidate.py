@@ -7,8 +7,10 @@ from app.models.candidate_profile import CandidateProfile
 from app.models.user import User
 from app.schemas.candidate import (
     CandidateProfileCreate,
-    CandidateProfileUpdate
+    CandidateProfileUpdate,
+    CandidateProfileResponse
 )
+
 
 router = APIRouter(
     prefix="/candidate",
@@ -16,7 +18,10 @@ router = APIRouter(
 )
 
 
-@router.post("/profile")
+@router.post(
+    "/profile",
+    response_model=CandidateProfileResponse
+)
 def create_candidate_profile(
     profile_data: CandidateProfileCreate,
     db: Session = Depends(get_db),
@@ -36,6 +41,7 @@ def create_candidate_profile(
         HTTPException: If the authenticated user is not a candidate
             or already has a profile.
     """
+
     if current_user.role != "candidate":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -68,7 +74,11 @@ def create_candidate_profile(
 
     return new_profile
 
-@router.get("/profile")
+
+@router.get(
+    "/profile",
+    response_model=CandidateProfileResponse
+)
 def get_candidate_profile(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -86,6 +96,7 @@ def get_candidate_profile(
         HTTPException: If the user is not a candidate or
             the profile does not exist.
     """
+
     if current_user.role != "candidate":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -106,7 +117,11 @@ def get_candidate_profile(
 
     return profile
 
-@router.put("/profile")
+
+@router.put(
+    "/profile",
+    response_model=CandidateProfileResponse
+)
 def update_candidate_profile(
     profile_data: CandidateProfileUpdate,
     db: Session = Depends(get_db),
@@ -126,6 +141,7 @@ def update_candidate_profile(
         HTTPException: If the user is not a candidate or
             the profile does not exist.
     """
+
     if current_user.role != "candidate":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
