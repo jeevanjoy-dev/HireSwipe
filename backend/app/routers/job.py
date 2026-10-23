@@ -168,19 +168,22 @@ def update_job(
         )
 
     job = (
-        db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.recruiter_id == recruiter_profile.id
-        )
-        .first()
-    )
+    db.query(Job)
+    .filter(Job.id == job_id)
+    .first()
+)
 
     if job is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found."
-        )
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Job not found."
+    )
+
+    if job.recruiter_id != recruiter_profile.id:
+        raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You are not allowed to modify this job."
+    )
 
     update_data = job_data.model_dump(exclude_unset=True)
 
@@ -210,8 +213,8 @@ def delete_job(
 
     Raises:
         HTTPException: If the user is not a recruiter, the recruiter
-            profile does not exist, or the job does not exist or
-            belong to the recruiter.
+            profile does not exist, the job does not exist, or the
+            recruiter does not own the job.
     """
 
     if current_user.role != "recruiter":
@@ -234,10 +237,7 @@ def delete_job(
 
     job = (
         db.query(Job)
-        .filter(
-            Job.id == job_id,
-            Job.recruiter_id == recruiter_profile.id
-        )
+        .filter(Job.id == job_id)
         .first()
     )
 
@@ -245,6 +245,12 @@ def delete_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found."
+        )
+
+    if job.recruiter_id != recruiter_profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not allowed to delete this job."
         )
 
     db.delete(job)
