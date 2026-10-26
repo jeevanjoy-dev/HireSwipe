@@ -1,13 +1,14 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class JobCreate(BaseModel):
-    """Represent data required to create a job.
+    """Represent data required to create a new job.
 
     Attributes:
-        title: Title of the job position.
+        title: Title of the job.
         description: Detailed description of the job.
         location: Location of the job.
         job_type: Type of employment.
@@ -20,15 +21,44 @@ class JobCreate(BaseModel):
     title: str
     description: str
     location: str | None = None
-    job_type: str
+
+    job_type: Literal[
+        "Full-time",
+        "Part-time",
+        "Internship",
+    ]
+
     experience_required: str | None = None
-    salary_min: int | None = None
-    salary_max: int | None = None
+
+    salary_min: int | None = Field(default=None, ge=0)
+    salary_max: int | None = Field(default=None, ge=0)
+
     requirements: str | None = None
+
+    @model_validator(mode="after")
+    def validate_salary_range(self):
+        """Validate that the minimum salary is not greater than the maximum salary.
+
+        Returns:
+            JobCreate: The validated job creation data.
+
+        Raises:
+            ValueError: If the minimum salary is greater than the maximum salary.
+        """
+        if (
+            self.salary_min is not None
+            and self.salary_max is not None
+            and self.salary_min > self.salary_max
+        ):
+            raise ValueError(
+                "Minimum salary cannot be greater than maximum salary."
+            )
+
+        return self
 
 
 class JobUpdate(BaseModel):
-    """Represent data that can be used to update a job.
+    """Represent optional data for updating an existing job.
 
     Attributes:
         title: Updated job title.
@@ -39,35 +69,64 @@ class JobUpdate(BaseModel):
         salary_min: Updated minimum salary.
         salary_max: Updated maximum salary.
         requirements: Updated job requirements.
-        is_active: Whether the job is currently active.
+        is_active: Whether the job is accepting applications.
     """
 
     title: str | None = None
     description: str | None = None
     location: str | None = None
-    job_type: str | None = None
+
+    job_type: Literal[
+        "Full-time",
+        "Part-time",
+        "Internship",
+    ] | None = None
+
     experience_required: str | None = None
-    salary_min: int | None = None
-    salary_max: int | None = None
+
+    salary_min: int | None = Field(default=None, ge=0)
+    salary_max: int | None = Field(default=None, ge=0)
+
     requirements: str | None = None
     is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_salary_range(self):
+        """Validate the salary range when both salary values are provided.
+
+        Returns:
+            JobUpdate: The validated job update data.
+
+        Raises:
+            ValueError: If the minimum salary is greater than the maximum salary.
+        """
+        if (
+            self.salary_min is not None
+            and self.salary_max is not None
+            and self.salary_min > self.salary_max
+        ):
+            raise ValueError(
+                "Minimum salary cannot be greater than maximum salary."
+            )
+
+        return self
 
 
 class JobResponse(BaseModel):
     """Represent job information returned by the API.
 
     Attributes:
-        id: Unique identifier for the job.
+        id: Unique identifier of the job.
         recruiter_id: ID of the recruiter who posted the job.
-        title: Title of the job position.
-        description: Detailed description of the job.
-        location: Location of the job.
-        job_type: Type of employment.
-        experience_required: Experience required for the job.
-        salary_min: Minimum salary offered.
-        salary_max: Maximum salary offered.
-        requirements: Skills and qualifications required.
-        is_active: Whether the job is currently active.
+        title: Job title.
+        description: Job description.
+        location: Job location.
+        job_type: Employment type.
+        experience_required: Required experience.
+        salary_min: Minimum salary.
+        salary_max: Maximum salary.
+        requirements: Job requirements.
+        is_active: Whether the job is active.
         created_at: Date and time when the job was created.
     """
 
