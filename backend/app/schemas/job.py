@@ -12,7 +12,8 @@ class JobCreate(BaseModel):
         description: Detailed description of the job.
         location: Location of the job.
         job_type: Type of employment.
-        experience_required: Experience required for the job.
+        experience_min: Minimum years of experience required for the job.
+        experience_max: Maximum years of experience accepted for the job.
         salary_min: Minimum salary offered.
         salary_max: Maximum salary offered.
         requirements: Skills and qualifications required.
@@ -28,12 +29,33 @@ class JobCreate(BaseModel):
         "Internship",
     ]
 
-    experience_required: str | None = None
-
+    experience_min: int | None = Field(default=None, ge=0)
+    experience_max: int | None = Field(default=None, ge=0)
     salary_min: int | None = Field(default=None, ge=0)
     salary_max: int | None = Field(default=None, ge=0)
 
     requirements: str | None = None
+
+    @model_validator(mode="after")
+    def validate_experience_range(self):
+        """Validate that the minimum experience is not greater than the maximum experience.
+
+        Returns:
+            JobCreate: The validated job creation data.
+
+        Raises:
+            ValueError: If the minimum experience is greater than the maximum experience.
+        """
+        if (
+            self.experience_min is not None
+            and self.experience_max is not None
+            and self.experience_min > self.experience_max
+        ):
+            raise ValueError(
+                "Minimum experience cannot be greater than maximum experience."
+            )
+
+        return self
 
     @model_validator(mode="after")
     def validate_salary_range(self):
@@ -65,7 +87,8 @@ class JobUpdate(BaseModel):
         description: Updated job description.
         location: Updated job location.
         job_type: Updated employment type.
-        experience_required: Updated experience requirement.
+        experience_min: Updated minimum years of experience required for the job.
+        experience_max: Updated maximum years of experience accepted for the job.
         salary_min: Updated minimum salary.
         salary_max: Updated maximum salary.
         requirements: Updated job requirements.
@@ -82,13 +105,36 @@ class JobUpdate(BaseModel):
         "Internship",
     ] | None = None
 
-    experience_required: str | None = None
+    experience_min: int | None = Field(default=None, ge=0)
+    experience_max: int | None = Field(default=None, ge=0)
 
     salary_min: int | None = Field(default=None, ge=0)
     salary_max: int | None = Field(default=None, ge=0)
 
     requirements: str | None = None
     is_active: bool | None = None
+
+
+    @model_validator(mode="after")
+    def validate_experience_range(self):
+        """Validate that the minimum experience is not greater than the maximum experience.
+
+        Returns:
+            JobUpdate: The validated job update data.
+
+        Raises:
+            ValueError: If the minimum experience is greater than the maximum experience.
+        """
+        if (
+            self.experience_min is not None
+            and self.experience_max is not None
+            and self.experience_min > self.experience_max
+        ):
+            raise ValueError(
+                "Minimum experience cannot be greater than maximum experience."
+            )
+
+        return self
 
     @model_validator(mode="after")
     def validate_salary_range(self):
@@ -122,7 +168,8 @@ class JobResponse(BaseModel):
         description: Job description.
         location: Job location.
         job_type: Employment type.
-        experience_required: Required experience.
+        experience_min: Minimum years of experience required for the job.
+        experience_max: Maximum years of experience accepted for the job.
         salary_min: Minimum salary.
         salary_max: Maximum salary.
         requirements: Job requirements.
@@ -138,7 +185,8 @@ class JobResponse(BaseModel):
     description: str
     location: str | None = None
     job_type: str
-    experience_required: str | None = None
+    experience_min: int | None = None
+    experience_max: int | None = None
     salary_min: int | None = None
     salary_max: int | None = None
     requirements: str | None = None

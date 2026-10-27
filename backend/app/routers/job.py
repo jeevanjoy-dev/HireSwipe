@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -60,7 +62,8 @@ def create_job(
         description=job_data.description,
         location=job_data.location,
         job_type=job_data.job_type,
-        experience_required=job_data.experience_required,
+        experience_min=job_data.experience_min,
+        experience_max=job_data.experience_max,
         salary_min=job_data.salary_min,
         salary_max=job_data.salary_max,
         requirements=job_data.requirements,
@@ -122,20 +125,42 @@ def get_my_jobs(
 
 @router.get("/", response_model=list[JobResponse])
 def get_jobs(
+    keyword: str | None = Query(default=None),
+    location: str | None = Query(default=None),
+    job_type: Literal[
+        "Full-time",
+        "Part-time",
+        "Internship",
+    ] | None = Query(default=None),
+    experience_min: int | None = Query(default=None, ge=0),
+    experience_max: int | None = Query(default=None, ge=0),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all active jobs for the authenticated candidate.
+    """Search and filter active jobs for the authenticated candidate.
 
     Args:
+        keyword: Optional keyword used to search job title,
+            description, and requirements.
+        location: Optional location used to filter jobs.
+        job_type: Optional employment type used to filter jobs.
+        experience_min: Optional minimum years of experience used
+            to filter jobs.
+        experience_max: Optional maximum years of experience used
+            to filter jobs.
+        skip: Number of jobs to skip for pagination.
+        limit: Maximum number of jobs to return.
         db: Database session used to retrieve jobs.
-        current_user: Authenticated candidate browsing jobs.
+        current_user: Authenticated candidate requesting jobs.
 
     Returns:
-        list[Job]: A list of active jobs.
+        list[Job]: A paginated list of active jobs matching the filters.
 
     Raises:
-        HTTPException: If the authenticated user is not a candidate.
+        HTTPException: If the authenticated user is not a candidate
+            or the experience range is invalid.
     """
 
     if current_user.role != "candidate":
@@ -144,10 +169,54 @@ def get_jobs(
             detail="Only candidates can browse jobs.",
         )
 
+    if (
+        experience_min is not None
+        and experience_max is not None
+        and experience_min > experience_max
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Minimum experience cannot be greater than maximum experience.",
+        )
+
+    query = db.query(Job).filter(Job.is_active.is_(True))  # Only search active jobs
+
+    if keyword:
+        search_term = f"%{keyword}%"  # Add wildcards for partial matching
+
+        query = query.filter(                         # Search title, description, and requirements
+            (Job.title.ilike(search_term))
+            | (Job.description.ilike(search_term))
+            | (Job.requirements.ilike(search_term))
+        )
+
+    if location:
+        query = query.filter(                         # Filter jobs by location
+            Job.location.ilike(f"%{location}%")
+        )
+
+    if job_type:
+        query = query.filter(                         # Filter jobs by employment type
+            Job.job_type == job_type
+        )
+
+    if experience_min is not None:
+        query = query.filter(                         # Match jobs whose maximum overlaps the selected minimum
+            (Job.experience_max.is_(None))
+            | (Job.experience_max >= experience_min)
+        )
+
+    if experience_max is not None:
+        query = query.filter(                         # Match jobs whose minimum overlaps the selected maximum
+            (Job.experience_min.is_(None))
+            | (Job.experience_min <= experience_max)
+        )
+
     jobs = (
-        db.query(Job)
-        .filter(Job.is_active == True)
-        .order_by(Job.created_at.desc())
+        query
+        .order_by(Job.created_at.desc())               # Show newest jobs first
+        .offset(skip)                                  # Skip previous results
+        .limit(limit)                                  # Limit returned results
         .all()
     )
 
@@ -236,7 +305,7 @@ def update_job(
     Raises:
         HTTPException: If the user is not a recruiter, the recruiter
             profile does not exist, the job does not exist, the recruiter
-            does not own the job, or the salary range is invalid.
+            does not own the job, or an experience/salary range is invalid.
     """
 
     if current_user.role != "recruiter":
@@ -277,8 +346,35 @@ def update_job(
 
     update_data = job_data.model_dump(exclude_unset=True)
 
-    new_salary_min = update_data.get("salary_min", job.salary_min)
-    new_salary_max = update_data.get("salary_max", job.salary_max)
+    new_salary_min = update_data.get(
+        "salary_min",
+        job.salary_min,
+    )
+
+    new_salary_max = update_data.get(
+        "salary_max",
+        job.salary_max,
+    )
+
+    new_experience_min = update_data.get(
+        "experience_min",
+        job.experience_min,
+    )
+
+    new_experience_max = update_data.get(
+        "experience_max",
+        job.experience_max,
+    )
+
+    if (
+        new_experience_min is not None
+        and new_experience_max is not None
+        and new_experience_min > new_experience_max
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Minimum experience cannot be greater than maximum experience.",
+        )
 
     if (
         new_salary_min is not None

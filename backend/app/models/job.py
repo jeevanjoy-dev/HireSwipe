@@ -16,7 +16,8 @@ class Job(Base):
         description: Detailed description of the job.
         location: Location where the job is based.
         job_type: Type of employment such as full-time or internship.
-        experience_required: Experience required for the position.
+        experience_min: Minimum years of experience required for the position.
+        experience_max: Maximum years of experience accepted for the position.
         salary_min: Minimum salary offered for the position.
         salary_max: Maximum salary offered for the position.
         requirements: Skills and qualifications required for the position.
@@ -57,10 +58,8 @@ class Job(Base):
         nullable=False
     )
 
-    experience_required: Mapped[str | None] = mapped_column(
-        String(100),
-        nullable=True
-    )
+    experience_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    experience_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     salary_min: Mapped[int | None] = mapped_column(
         Integer,
