@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from typing import Literal
 
 from app.database import get_db
 from app.dependencies.security import get_current_user
@@ -7,7 +8,12 @@ from app.models.application import Application
 from app.models.candidate_profile import CandidateProfile
 from app.models.job import Job
 from app.models.user import User
-from app.schemas.application import ApplicationCreate, ApplicationResponse, ApplicationStatusUpdate
+from app.schemas.application import (
+    ApplicationCreate,
+    ApplicationDetailResponse,
+    ApplicationResponse,
+    ApplicationStatusUpdate,
+)
 from app.models.recruiter_profile import RecruiterProfile
 
 router = APIRouter(
@@ -156,9 +162,15 @@ def get_my_applications(
     response_model=list[ApplicationResponse],
   )
 def get_recruiter_applications(
+    status_filter: Literal[
+        "Applied",
+        "Shortlisted",
+        "Rejected",
+        "Selected",
+    ] | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-  ):
+):
     """Get applications submitted to jobs owned by the authenticated recruiter.
 
     Args:
@@ -191,15 +203,115 @@ def get_recruiter_applications(
             detail="Recruiter profile not found.",
         )
 
-    applications = (
-        db.query(Application)
-        .join(Job, Application.job_id == Job.id)
-        .filter(Job.recruiter_id == recruiter_profile.id)
-        .order_by(Application.applied_at.desc())  # Show newest applications first
-        .all()
+    query = (
+    db.query(Application)
+    .join(Job, Application.job_id == Job.id)
+    .filter(Job.recruiter_id == recruiter_profile.id)
     )
 
+    if status_filter:
+        query = query.filter(                         # Filter applications by status
+            Application.status == status_filter
+    )
+
+    applications = (
+    query
+    .order_by(Application.applied_at.desc())       # Show newest applications first
+    .all()
+    )
     return applications
+
+@router.get(
+    "/{application_id}",
+    response_model=ApplicationDetailResponse,
+)
+def get_application_details(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get detailed information about an accessible application.
+
+    Args:
+        application_id: ID of the application to retrieve.
+        db: Database session used to retrieve application data.
+        current_user: Authenticated user requesting the application.
+
+    Returns:
+        ApplicationDetailResponse: Detailed application information.
+
+    Raises:
+        HTTPException: If the application does not exist or the user
+            is not authorized to access it.
+    """
+
+    application = (
+        db.query(Application)
+        .join(Job, Application.job_id == Job.id)
+        .filter(Application.id == application_id)
+        .first()
+    )
+
+    if application is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    if current_user.role == "candidate":
+        candidate_profile = (
+            db.query(CandidateProfile)
+            .filter(CandidateProfile.user_id == current_user.id)
+            .first()
+        )
+
+        if candidate_profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Candidate profile not found.",
+            )
+
+        if application.candidate_id != candidate_profile.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to view this application.",
+            )
+
+    elif current_user.role == "recruiter":
+        recruiter_profile = (
+            db.query(RecruiterProfile)
+            .filter(RecruiterProfile.user_id == current_user.id)
+            .first()
+        )
+
+        if recruiter_profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recruiter profile not found.",
+            )
+
+        if application.job.recruiter_id != recruiter_profile.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to view this application.",
+            )
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not allowed to view applications.",
+        )
+
+    return ApplicationDetailResponse(
+        id=application.id,
+        candidate_id=application.candidate_id,
+        job_id=application.job_id,
+        job_title=application.job.title,
+        job_location=application.job.location,
+        job_type=application.job.job_type,
+        status=application.status,
+        applied_at=application.applied_at,
+    )
 
 @router.put(
     "/{application_id}/status",
