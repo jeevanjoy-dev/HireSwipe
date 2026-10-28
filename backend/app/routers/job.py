@@ -8,7 +8,7 @@ from app.dependencies.auth import get_current_user
 from app.models.job import Job
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.user import User
-from app.schemas.job import JobCreate, JobResponse, JobUpdate
+from app.schemas.job import JobCreate, JobResponse, JobUpdate, JobListResponse
 
 
 router = APIRouter(
@@ -123,7 +123,7 @@ def get_my_jobs(
     return jobs
 
 
-@router.get("/", response_model=list[JobResponse])
+@router.get("/", response_model=JobListResponse)
 def get_jobs(
     keyword: str | None = Query(default=None),
     location: str | None = Query(default=None),
@@ -156,7 +156,8 @@ def get_jobs(
         current_user: Authenticated candidate requesting jobs.
 
     Returns:
-        list[Job]: A paginated list of active jobs matching the filters.
+        JobListResponse: Paginated active jobs matching the filters,
+           along with pagination metadata.
 
     Raises:
         HTTPException: If the authenticated user is not a candidate
@@ -212,15 +213,24 @@ def get_jobs(
             | (Job.experience_min <= experience_max)
         )
 
+    total = query.count()                         # Count all jobs matching the filters
+
     jobs = (
         query
-        .order_by(Job.created_at.desc())               # Show newest jobs first
-        .offset(skip)                                  # Skip previous results
-        .limit(limit)                                  # Limit returned results
+        .order_by(Job.created_at.desc())           # Show newest jobs first
+        .offset(skip)                              # Skip previous results
+        .limit(limit)                              # Limit returned results
         .all()
     )
 
-    return jobs
+    return JobListResponse(
+        total=total,
+        skip=skip,
+        limit=limit,
+        jobs=jobs,
+    )
+
+    
 
 
 @router.get("/{job_id}", response_model=JobResponse)

@@ -5,7 +5,7 @@ from app.routers import candidate
 from app.routers import recruiter
 from app.routers import company
 from app.routers import job
-
+from app.routers import application
 
 
 app = FastAPI(
@@ -23,6 +23,8 @@ app.include_router(recruiter.router)
 app.include_router(company.router)
 
 app.include_router(job.router)
+
+app.include_router(application.router)
 
 
 

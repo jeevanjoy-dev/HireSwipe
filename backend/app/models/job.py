@@ -92,3 +92,8 @@ class Job(Base):
         "RecruiterProfile",
         back_populates="jobs"
     )
+
+    applications = relationship(
+        "Application",
+        back_populates="job"
+    )

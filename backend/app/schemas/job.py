@@ -192,3 +192,19 @@ class JobResponse(BaseModel):
     requirements: str | None = None
     is_active: bool
     created_at: datetime
+    
+
+class JobListResponse(BaseModel):
+    """Represent a paginated list of jobs returned by the API.
+
+    Attributes:
+        total: Total number of jobs matching the search filters.
+        skip: Number of jobs skipped for pagination.
+        limit: Maximum number of jobs requested.
+        jobs: Jobs returned for the current page.
+    """
+
+    total: int
+    skip: int
+    limit: int
+    jobs: list[JobResponse]

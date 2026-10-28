@@ -54,3 +54,8 @@ class CandidateProfile(Base):
         "User",
         back_populates="candidate_profile"
     )
+
+    applications = relationship(
+        "Application",
+        back_populates="candidate"
+    )
