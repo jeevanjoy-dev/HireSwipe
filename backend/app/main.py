@@ -6,12 +6,21 @@ from app.routers import recruiter
 from app.routers import company
 from app.routers import job
 from app.routers import application
+from fastapi.middleware.cors import CORSMiddleware
 
 
 app = FastAPI(
     title="HireSwipe API",
     description="Recruitment and career platform API",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth.router)

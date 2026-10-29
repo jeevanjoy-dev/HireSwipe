@@ -231,51 +231,32 @@ def get_jobs(
     )
 
     
-
-
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get a job by ID for the recruiter who owns the job.
+    """Get an active job by its ID.
 
     Args:
-        job_id: ID of the job to retrieve.
-        db: Database session used to retrieve the job.
-        current_user: Authenticated recruiter requesting the job.
+        job_id: Unique identifier of the job.
+        db: Database session used to query the job.
+        current_user: Authenticated user requesting the job.
 
     Returns:
-        Job: The requested job owned by the authenticated recruiter.
+        JobResponse containing the requested active job.
 
     Raises:
-        HTTPException: If the user is not a recruiter, the recruiter
-            profile does not exist, the job does not exist, or the
-            recruiter does not own the job.
+        HTTPException: If the job does not exist or is inactive.
     """
-
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only recruiters can access jobs by ID.",
-        )
-
-    recruiter_profile = (
-        db.query(RecruiterProfile)
-        .filter(RecruiterProfile.user_id == current_user.id)
-        .first()
-    )
-
-    if recruiter_profile is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Recruiter profile not found.",
-        )
 
     job = (
         db.query(Job)
-        .filter(Job.id == job_id)
+        .filter(
+            Job.id == job_id,
+            Job.is_active.is_(True),
+        )
         .first()
     )
 
@@ -285,14 +266,7 @@ def get_job(
             detail="Job not found.",
         )
 
-    if job.recruiter_id != recruiter_profile.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not allowed to access this job.",
-        )
-
     return job
-
 
 @router.put("/{job_id}", response_model=JobResponse)
 def update_job(
