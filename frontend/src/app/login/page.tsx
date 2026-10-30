@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { apiRequest } from "../../services/api";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+    const router = useRouter();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [message, setMessage] = useState("");
@@ -19,7 +21,7 @@ export default function LoginPage() {
             });
 
             localStorage.setItem("access_token", data.access_token);
-            setMessage("Login successful!");
+            router.push("/dashboard");
         } catch {
             setMessage("Login failed. Check your email and password.");
         }

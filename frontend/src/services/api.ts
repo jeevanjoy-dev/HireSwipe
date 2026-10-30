@@ -8,7 +8,9 @@ export async function apiRequest(
 
     const headers = new Headers(options.headers);
 
-    headers.set("Content-Type", "application/json");
+    if (options.body) {
+        headers.set("Content-Type", "application/json");
+    }
 
     if (token) {
         headers.set("Authorization", `Bearer ${token}`); // Send JWT for authenticated requests
@@ -27,5 +29,9 @@ export async function apiRequest(
         );
     }
 
-    return response.json();
+    if (response.status === 204) {
+      return null;
+}
+
+return response.json();
 }
