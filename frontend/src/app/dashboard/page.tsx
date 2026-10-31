@@ -117,23 +117,6 @@ export default function DashboardPage() {
           </p>
         </section>
 
-        {/* User information */}
-        <section className="mb-10 rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl">
-          <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="mb-1 text-sm text-slate-500">Signed in as</p>
-
-              <h2 className="text-xl font-semibold text-white">
-                {user.email}
-              </h2>
-            </div>
-
-            <div className="rounded-full border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400">
-              {user.role}
-            </div>
-          </div>
-        </section>
-
         {/* Candidate dashboard */}
         {isCandidate && (
           <section>
@@ -200,7 +183,7 @@ export default function DashboardPage() {
                 </div>
 
                 <h3 className="text-lg font-semibold">
-                  My Applications
+                  My Jobs
                 </h3>
 
                 <p className="mt-2 text-sm leading-6 text-slate-400">
