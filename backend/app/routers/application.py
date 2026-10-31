@@ -149,11 +149,14 @@ def get_my_applications(
         )
 
     applications = (
-        db.query(Application)
-        .filter(Application.candidate_id == candidate_profile.id)
-        .order_by(Application.applied_at.desc())  # Show newest applications first
-        .all()
+    db.query(Application)
+    .filter(
+        Application.candidate_id == candidate_profile.id,
+        Application.is_archived.is_(False),
     )
+    .order_by(Application.applied_at.desc())
+    .all()
+    ) 
 
     return applications
 
@@ -220,6 +223,128 @@ def get_recruiter_applications(
     .all()
     )
     return applications
+
+@router.put("/{application_id}/archive", response_model=ApplicationResponse)
+def archive_application(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Archive an application belonging to the authenticated candidate.
+
+    Args:
+        application_id: ID of the application to archive.
+        db: Database session.
+        current_user: Authenticated user making the request.
+
+    Returns:
+        ApplicationResponse: The archived application.
+
+    Raises:
+        HTTPException: If the user is not a candidate or does not own the application.
+    """
+    if current_user.role != "candidate":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only candidates can archive applications.",
+        )
+
+    candidate_profile = (
+        db.query(CandidateProfile)
+        .filter(CandidateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if candidate_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found.",
+        )
+
+    application = (
+        db.query(Application)
+        .filter(Application.id == application_id)
+        .first()
+    )
+
+    if application is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    if application.candidate_id != candidate_profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not allowed to archive this application.",
+        )
+
+    application.is_archived = True
+
+    db.commit()
+    db.refresh(application)
+
+    return application
+
+@router.get("/archived", response_model=list[ApplicationDetailResponse])
+def get_archived_applications(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return applications archived by the authenticated candidate.
+
+    Args:
+        db: Database session.
+        current_user: Authenticated user making the request.
+
+    Returns:
+        list[ApplicationDetailResponse]: Archived applications.
+
+    Raises:
+        HTTPException: If the user is not a candidate or has no profile.
+    """
+    if current_user.role != "candidate":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only candidates can view archived applications.",
+        )
+
+    candidate_profile = (
+        db.query(CandidateProfile)
+        .filter(CandidateProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if candidate_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found.",
+        )
+
+    applications = (
+        db.query(Application)
+        .join(Job, Application.job_id == Job.id)
+        .filter(
+            Application.candidate_id == candidate_profile.id,
+            Application.is_archived.is_(True),
+        )
+        .order_by(Application.applied_at.desc())
+        .all()
+    )
+
+    return [
+        ApplicationDetailResponse(
+            id=application.id,
+            candidate_id=application.candidate_id,
+            job_id=application.job_id,
+            job_title=application.job.title,
+            job_location=application.job.location,
+            job_type=application.job.job_type,
+            status=application.status,
+            applied_at=application.applied_at,
+        )
+        for application in applications
+    ]
 
 @router.get(
     "/{application_id}",

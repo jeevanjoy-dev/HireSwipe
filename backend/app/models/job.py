@@ -94,7 +94,12 @@ class Job(Base):
     )
 
     applications = relationship(
-    "Application",
-    back_populates="job",
-    cascade="all, delete-orphan",
-)
+        "Application",
+        back_populates="job",
+        cascade="all, delete-orphan",  
+    )
+
+    saved_jobs = relationship(
+        "SavedJob",
+        back_populates="job",
+    )
