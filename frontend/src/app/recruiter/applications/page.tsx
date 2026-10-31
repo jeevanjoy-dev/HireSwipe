@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiRequest } from "../../../services/api";
 
 interface Application {
   id: number;
@@ -10,6 +11,14 @@ interface Application {
   job_title: string;
   job_location: string | null;
   job_type: string;
+  status: string;
+  applied_at: string;
+}
+
+interface ApplicationSummary {
+  id: number;
+  candidate_id: number;
+  job_id: number;
   status: string;
   applied_at: string;
 }
@@ -38,6 +47,9 @@ export default function RecruiterApplicationsPage() {
      */
     async function loadApplications() {
       try {
+        setLoading(true);
+        setError("");
+
         const token = localStorage.getItem("access_token");
 
         if (!token) {
@@ -45,64 +57,15 @@ export default function RecruiterApplicationsPage() {
           return;
         }
 
-        const response = await fetch(
-          "http://127.0.0.1:8000/applications/recruiter-applications",
-          {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
+        const data: ApplicationSummary[] = await apiRequest(
+          "/applications/recruiter-applications"
         );
 
-        const data = await response.json();
-
-        if (!response.ok) {
-          if (response.status === 401) {
-            localStorage.removeItem("access_token");
-            router.push("/login");
-            return;
-          }
-
-          if (response.status === 403) {
-            throw new Error(
-              "Only recruiters can view recruiter applications."
-            );
-          }
-
-          throw new Error(
-            data.detail || "Failed to load applications."
-          );
-        }
-
         const detailedApplications = await Promise.all(
-          data.map(async (application: {
-            id: number;
-            candidate_id: number;
-            job_id: number;
-            status: string;
-            applied_at: string;
-          }) => {
-            const detailResponse = await fetch(
-              `http://127.0.0.1:8000/applications/${application.id}`,
-              {
-                method: "GET",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-              }
+          data.map(async (application) => {
+            return await apiRequest(
+              `/applications/${application.id}`
             );
-
-            const detailData = await detailResponse.json();
-
-            if (!detailResponse.ok) {
-              throw new Error(
-                detailData.detail ||
-                  "Failed to load application details."
-              );
-            }
-
-            return detailData;
           })
         );
 
@@ -123,6 +86,9 @@ export default function RecruiterApplicationsPage() {
     loadApplications();
   }, [router]);
 
+  /**
+   * Update the status of a recruiter's application.
+   */
   async function updateStatus(
     applicationId: number,
     status: string
@@ -138,44 +104,23 @@ export default function RecruiterApplicationsPage() {
         return;
       }
 
-      const response = await fetch(
-        `http://127.0.0.1:8000/applications/${applicationId}/status`,
+      const data = await apiRequest(
+        `/applications/${applicationId}/status`,
         {
           method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
           body: JSON.stringify({
             status,
           }),
         }
       );
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          localStorage.removeItem("access_token");
-          router.push("/login");
-          return;
-        }
-
-        if (response.status === 403) {
-          throw new Error(
-            "You are not allowed to update this application."
-          );
-        }
-
-        throw new Error(
-          data.detail || "Failed to update application status."
-        );
-      }
-
       setApplications((currentApplications) =>
         currentApplications.map((application) =>
           application.id === applicationId
-            ? { ...application, status: data.status }
+            ? {
+                ...application,
+                status: data.status,
+              }
             : application
         )
       );
@@ -224,7 +169,8 @@ export default function RecruiterApplicationsPage() {
             </p>
 
             <p>
-              <strong>Job Type:</strong> {application.job_type}
+              <strong>Job Type:</strong>{" "}
+              {application.job_type}
             </p>
 
             <p>

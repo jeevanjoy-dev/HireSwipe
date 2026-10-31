@@ -1,162 +1,119 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { apiRequest } from "../../services/api";
 
 interface Application {
-  id: number;
-  candidate_id: number;
-  job_id: number;
-  job_title: string;
-  job_location: string | null;
-  job_type: string;
-  status: string;
-  applied_at: string;
+    id: number;
+    candidate_id: number;
+    job_id: number;
+    status: string;
+    applied_at: string;
+}
+
+interface ApplicationDetail {
+    id: number;
+    candidate_id: number;
+    job_id: number;
+    job_title: string;
+    job_location: string | null;
+    job_type: string;
+    status: string;
+    applied_at: string;
 }
 
 /**
- * Display the authenticated candidate's submitted job applications.
+ * Display the authenticated candidate's job applications.
  */
 export default function ApplicationsPage() {
-  const router = useRouter();
+    const [applications, setApplications] = useState<ApplicationDetail[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
 
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
     /**
-     * Load the candidate's applications from the FastAPI backend.
+     * Load the authenticated candidate's applications.
      */
     async function loadApplications() {
-      try {
-        const token = localStorage.getItem("access_token");
+        try {
+            setLoading(true);
+            setError("");
 
-        if (!token) {
-          router.push("/login");
-          return;
-        }
-
-        const response = await fetch(
-          "http://127.0.0.1:8000/applications/my-applications",
-          {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          if (response.status === 401) {
-            localStorage.removeItem("access_token");
-            router.push("/login");
-            return;
-          }
-
-          throw new Error(
-            data.detail || "Failed to load applications."
-          );
-        }
-
-        /*
-         * The list endpoint returns application IDs and basic data.
-         * Fetch each application's detailed information to get job details.
-         */
-        const detailedApplications = await Promise.all(
-          data.map(async (application: {
-            id: number;
-            candidate_id: number;
-            job_id: number;
-            status: string;
-            applied_at: string;
-          }) => {
-            const detailResponse = await fetch(
-              `http://127.0.0.1:8000/applications/${application.id}`,
-              {
-                method: "GET",
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-              }
+            const data: Application[] = await apiRequest(
+                "/applications/my-applications"
             );
 
-            const detailData = await detailResponse.json();
+            const detailedApplications = await Promise.all(
+                data.map(async (application) => {
+                    return await apiRequest(
+                        `/applications/${application.id}`
+                    );
+                })
+            );
 
-            if (!detailResponse.ok) {
-              throw new Error(
-                detailData.detail || "Failed to load application details."
-              );
+            setApplications(detailedApplications);
+        } catch (error) {
+            console.error("Failed to load applications:", error);
+
+            if (error instanceof Error) {
+                setError(error.message);
+            } else {
+                setError("Failed to load applications.");
             }
-
-            return detailData;
-          })
-        );
-
-        setApplications(detailedApplications);
-      } catch (error) {
-        console.error("Applications loading error:", error);
-
-        if (error instanceof Error) {
-          setError(error.message);
-        } else {
-          setError("Failed to load applications.");
+        } finally {
+            setLoading(false);
         }
-      } finally {
-        setLoading(false);
-      }
     }
 
-    loadApplications();
-  }, [router]);
+    useEffect(() => {
+        loadApplications();
+    }, []);
 
-  if (loading) {
-    return <p>Loading applications...</p>;
-  }
+    if (loading) {
+        return (
+            <main>
+                <h1>My Applications</h1>
+                <p>Loading applications...</p>
+            </main>
+        );
+    }
 
-  if (error) {
-    return <p>{error}</p>;
-  }
+    return (
+        <main>
+            <h1>My Applications</h1>
 
-  return (
-    <main>
-      <h1>My Applications</h1>
+            {error && <p>{error}</p>}
 
-      {applications.length === 0 ? (
-        <p>You have not applied for any jobs yet.</p>
-      ) : (
-        applications.map((application) => (
-          <section key={application.id}>
-            <h2>{application.job_title}</h2>
+            {!error && applications.length === 0 && (
+                <p>You have not applied for any jobs yet.</p>
+            )}
 
-            <p>
-              <strong>Location:</strong>{" "}
-              {application.job_location || "Not specified"}
-            </p>
+            {applications.map((application) => (
+                <div key={application.id}>
+                    <h2>{application.job_title}</h2>
 
-            <p>
-              <strong>Job Type:</strong> {application.job_type}
-            </p>
+                    <p>
+                        <strong>Location:</strong>{" "}
+                        {application.job_location || "Not specified"}
+                    </p>
 
-            <p>
-              <strong>Status:</strong> {application.status}
-            </p>
+                    <p>
+                        <strong>Job Type:</strong>{" "}
+                        {application.job_type}
+                    </p>
 
-            <p>
-              <strong>Applied:</strong>{" "}
-              {new Date(application.applied_at).toLocaleDateString()}
-            </p>
+                    <p>
+                        <strong>Status:</strong>{" "}
+                        {application.status}
+                    </p>
 
-            <hr />
-          </section>
-        ))
-      )}
-
-      <button onClick={() => router.push("/jobs")}>
-        Browse Jobs
-      </button>
-    </main>
-  );
+                    <p>
+                        <strong>Applied:</strong>{" "}
+                        {new Date(
+                            application.applied_at
+                        ).toLocaleDateString()}
+                    </p>
+                </div>
+            ))}
+        </main>
+    );
 }

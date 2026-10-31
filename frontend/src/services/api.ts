@@ -1,5 +1,18 @@
 const API_BASE_URL = "http://127.0.0.1:8000";
 
+/**
+ * Send an HTTP request to the HireSwipe backend API.
+ *
+ * Args:
+ *     endpoint: Backend API endpoint.
+ *     options: Fetch request options.
+ *
+ * Returns:
+ *     Parsed JSON response from the backend, or null for 204 responses.
+ *
+ * Raises:
+ *     Error: If the backend returns an unsuccessful response.
+ */
 export async function apiRequest(
     endpoint: string,
     options: RequestInit = {}
@@ -30,8 +43,8 @@ export async function apiRequest(
     }
 
     if (response.status === 204) {
-      return null;
-}
+        return null;
+    }
 
-return response.json();
+    return response.json();
 }
