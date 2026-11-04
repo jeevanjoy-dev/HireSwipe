@@ -67,6 +67,17 @@ def create_job(
         salary_min=job_data.salary_min,
         salary_max=job_data.salary_max,
         requirements=job_data.requirements,
+        application_method=job_data.application_method,
+        application_url=(
+            str(job_data.application_url)
+            if job_data.application_url
+            else None
+        ),
+        application_email=(
+            str(job_data.application_email)
+            if job_data.application_email
+            else None
+        ),
     )
 
     db.add(new_job)
@@ -74,6 +85,7 @@ def create_job(
     db.refresh(new_job)
 
     return new_job
+    
 
 
 @router.get("/my-jobs", response_model=list[JobResponse])

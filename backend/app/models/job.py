@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -21,6 +22,9 @@ class Job(Base):
         salary_min: Minimum salary offered for the position.
         salary_max: Maximum salary offered for the position.
         requirements: Skills and qualifications required for the position.
+        application_method: Method candidates use to apply for the job.
+        application_url: External company application URL, if applicable.
+        application_email: HR email address, if applicable.
         is_active: Whether the job is currently accepting applications.
         created_at: Date and time when the job was created.
     """
@@ -76,6 +80,22 @@ class Job(Base):
         nullable=True
     )
 
+    application_method: Mapped[str] = mapped_column(
+        String(20),
+        default="Platform",
+        nullable=False
+    )
+
+    application_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True
+    )
+
+    application_email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -96,10 +116,11 @@ class Job(Base):
     applications = relationship(
         "Application",
         back_populates="job",
-        cascade="all, delete-orphan",  
+        cascade="all, delete-orphan",
     )
 
     saved_jobs = relationship(
-        "SavedJob",
-        back_populates="job",
-    )
+       "SavedJob",
+       back_populates="job",
+       cascade="all, delete-orphan",
+)

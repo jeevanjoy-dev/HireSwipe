@@ -60,3 +60,14 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     created_at: datetime
+
+class EmailUpdateRequest(BaseModel):
+    """Represent the data required to update a user's email address.
+
+    Attributes:
+        new_email: New email address for the account.
+        current_password: Current password used to verify the user's identity.
+    """
+
+    new_email: EmailStr
+    current_password: str

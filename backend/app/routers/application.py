@@ -1,3 +1,4 @@
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Literal
@@ -8,13 +9,13 @@ from app.models.application import Application
 from app.models.candidate_profile import CandidateProfile
 from app.models.job import Job
 from app.models.user import User
+from app.models.recruiter_profile import RecruiterProfile
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationDetailResponse,
     ApplicationResponse,
     ApplicationStatusUpdate,
 )
-from app.models.recruiter_profile import RecruiterProfile
 
 router = APIRouter(
     prefix="/applications",
@@ -35,7 +36,7 @@ def apply_for_job(
     """Submit a job application for the authenticated candidate.
 
     Args:
-        application_data: Job ID supplied by the candidate.
+        application_data: Job ID and candidate introduction.
         db: Database session used to access application data.
         current_user: Authenticated user submitting the application.
 
@@ -99,6 +100,7 @@ def apply_for_job(
     application = Application(
         candidate_id=candidate_profile.id,
         job_id=job.id,
+        about_yourself=application_data.about_yourself,
     )
 
     db.add(application)
@@ -111,11 +113,11 @@ def apply_for_job(
 @router.get(
     "/my-applications",
     response_model=list[ApplicationResponse],
-    )
+)
 def get_my_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    ):
+):
     """Get all applications submitted by the authenticated candidate.
 
     Args:
@@ -124,10 +126,6 @@ def get_my_applications(
 
     Returns:
         list[Application]: Applications submitted by the current candidate.
-
-    Raises:
-        HTTPException: If the authenticated user is not a candidate or
-            the candidate profile does not exist.
     """
 
     if current_user.role != "candidate":
@@ -149,21 +147,22 @@ def get_my_applications(
         )
 
     applications = (
-    db.query(Application)
-    .filter(
-        Application.candidate_id == candidate_profile.id,
-        Application.is_archived.is_(False),
+        db.query(Application)
+        .filter(
+            Application.candidate_id == candidate_profile.id,
+            Application.is_archived.is_(False),
+        )
+        .order_by(Application.applied_at.desc())
+        .all()
     )
-    .order_by(Application.applied_at.desc())
-    .all()
-    ) 
 
     return applications
+
 
 @router.get(
     "/recruiter-applications",
     response_model=list[ApplicationResponse],
-  )
+)
 def get_recruiter_applications(
     status_filter: Literal[
         "Applied",
@@ -177,15 +176,12 @@ def get_recruiter_applications(
     """Get applications submitted to jobs owned by the authenticated recruiter.
 
     Args:
+        status_filter: Optional application status filter.
         db: Database session used to retrieve applications.
         current_user: Authenticated recruiter requesting applications.
 
     Returns:
         list[Application]: Applications submitted to the recruiter's jobs.
-
-    Raises:
-        HTTPException: If the user is not a recruiter or the recruiter
-            profile does not exist.
     """
 
     if current_user.role != "recruiter":
@@ -207,24 +203,27 @@ def get_recruiter_applications(
         )
 
     query = (
-    db.query(Application)
-    .join(Job, Application.job_id == Job.id)
-    .filter(Job.recruiter_id == recruiter_profile.id)
+        db.query(Application)
+        .join(Job, Application.job_id == Job.id)
+        .filter(Job.recruiter_id == recruiter_profile.id)
     )
 
     if status_filter:
-        query = query.filter(                         # Filter applications by status
-            Application.status == status_filter
-    )
+        query = query.filter(Application.status == status_filter)
 
     applications = (
-    query
-    .order_by(Application.applied_at.desc())       # Show newest applications first
-    .all()
+        query
+        .order_by(Application.applied_at.desc())
+        .all()
     )
+
     return applications
 
-@router.put("/{application_id}/archive", response_model=ApplicationResponse)
+
+@router.put(
+    "/{application_id}/archive",
+    response_model=ApplicationResponse,
+)
 def archive_application(
     application_id: int,
     db: Session = Depends(get_db),
@@ -239,10 +238,8 @@ def archive_application(
 
     Returns:
         ApplicationResponse: The archived application.
-
-    Raises:
-        HTTPException: If the user is not a candidate or does not own the application.
     """
+
     if current_user.role != "candidate":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -286,7 +283,11 @@ def archive_application(
 
     return application
 
-@router.get("/archived", response_model=list[ApplicationDetailResponse])
+
+@router.get(
+    "/archived",
+    response_model=list[ApplicationDetailResponse],
+)
 def get_archived_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -299,10 +300,8 @@ def get_archived_applications(
 
     Returns:
         list[ApplicationDetailResponse]: Archived applications.
-
-    Raises:
-        HTTPException: If the user is not a candidate or has no profile.
     """
+
     if current_user.role != "candidate":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -340,11 +339,13 @@ def get_archived_applications(
             job_title=application.job.title,
             job_location=application.job.location,
             job_type=application.job.job_type,
+            about_yourself=application.about_yourself,
             status=application.status,
             applied_at=application.applied_at,
         )
         for application in applications
     ]
+
 
 @router.get(
     "/{application_id}",
@@ -364,10 +365,6 @@ def get_application_details(
 
     Returns:
         ApplicationDetailResponse: Detailed application information.
-
-    Raises:
-        HTTPException: If the application does not exist or the user
-            is not authorized to access it.
     """
 
     application = (
@@ -434,9 +431,11 @@ def get_application_details(
         job_title=application.job.title,
         job_location=application.job.location,
         job_type=application.job.job_type,
+        about_yourself=application.about_yourself,
         status=application.status,
         applied_at=application.applied_at,
     )
+
 
 @router.put(
     "/{application_id}/status",
@@ -458,11 +457,6 @@ def update_application_status(
 
     Returns:
         Application: The updated application.
-
-    Raises:
-        HTTPException: If the user is not a recruiter, the recruiter
-            profile does not exist, the application does not exist,
-            or the application belongs to another recruiter.
     """
 
     if current_user.role != "recruiter":

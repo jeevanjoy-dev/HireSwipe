@@ -1,5 +1,6 @@
+
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -12,6 +13,7 @@ class Application(Base):
         id: Unique identifier of the application.
         candidate_id: ID of the candidate profile submitting the application.
         job_id: ID of the job being applied for.
+        about_yourself: Candidate's introduction submitted with the application.
         status: Current status of the application.
         is_archived: Whether the candidate has manually archived the application.
         applied_at: Date and time when the application was submitted.
@@ -29,6 +31,11 @@ class Application(Base):
     job_id: Mapped[int] = mapped_column(
         ForeignKey("jobs.id"),
         nullable=False,
+    )
+
+    about_yourself: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
 
     status: Mapped[str] = mapped_column(

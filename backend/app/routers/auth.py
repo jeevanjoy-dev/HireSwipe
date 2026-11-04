@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import RegisterRequest, LoginRequest,TokenResponse,UserResponse
+from app.schemas.auth import RegisterRequest, LoginRequest,TokenResponse,UserResponse,EmailUpdateRequest
 from app.dependencies.security import (hash_password,verify_password,create_access_token)
 from app.dependencies.auth import get_current_user
 
@@ -117,4 +117,55 @@ def get_me(current_user: User = Depends(get_current_user)):
     Returns:
         User: The currently authenticated user.
     """
+    return current_user
+
+@router.put("/email", response_model=UserResponse)
+def update_email(
+    email_data: EmailUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the email address of the authenticated user.
+
+    Args:
+        email_data: New email address and current password.
+        current_user: User authenticated through JWT.
+        db: Database session used to update the user.
+
+    Returns:
+        User: Updated user information.
+
+    Raises:
+        HTTPException: If the password is incorrect or email is already registered.
+    """
+
+    if not verify_password(
+        email_data.current_password,
+        current_user.password_hash
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Current password is incorrect."
+        )
+
+    existing_user = (
+        db.query(User)
+        .filter(
+            User.email == email_data.new_email,
+            User.id != current_user.id
+        )
+        .first()
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Email is already registered."
+        )
+
+    current_user.email = email_data.new_email
+
+    db.commit()
+    db.refresh(current_user)
+
     return current_user
