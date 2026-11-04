@@ -1,8 +1,11 @@
+
 "use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiRequest } from "../../../../services/api";
+
+type ApplicationMethod = "Platform" | "Email" | "External";
 
 /**
  * Display the recruiter job creation form.
@@ -20,22 +23,28 @@ export default function CreateJobPage() {
   const [salaryMax, setSalaryMax] = useState("");
   const [requirements, setRequirements] = useState("");
 
+  // Application method fields
+  const [applicationMethod, setApplicationMethod] =
+    useState<ApplicationMethod>("Platform");
+  const [applicationUrl, setApplicationUrl] = useState("");
+  const [applicationEmail, setApplicationEmail] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  /**
+   * Submit a new job to the FastAPI backend.
+   *
+   * Args:
+   *     event: Form submission event.
+   *
+   * Returns:
+   *     None. Creates the job and redirects to recruiter jobs.
+   */
   async function handleSubmit(
     event: React.FormEvent<HTMLFormElement>
   ) {
-    /**
-     * Submit a new job to the FastAPI backend.
-     *
-     * Args:
-     *     event: Form submission event.
-     *
-     * Returns:
-     *     None. Creates the job and redirects to the recruiter dashboard.
-     */
     event.preventDefault();
 
     setLoading(true);
@@ -59,6 +68,19 @@ export default function CreateJobPage() {
           salary_max:
             salaryMax === "" ? null : Number(salaryMax),
           requirements: requirements || null,
+
+          // Send the selected application method
+          application_method: applicationMethod,
+
+          // Send only the relevant application detail
+          application_url:
+            applicationMethod === "External"
+              ? applicationUrl
+              : null,
+          application_email:
+            applicationMethod === "Email"
+              ? applicationEmail
+              : null,
         }),
       });
 
@@ -246,6 +268,73 @@ export default function CreateJobPage() {
               className="w-full rounded-md border p-3"
             />
           </div>
+
+          {/* Application method selection */}
+          <div>
+            <label className="mb-2 block font-medium">
+              Application Method
+            </label>
+
+            <select
+              value={applicationMethod}
+              onChange={(event) =>
+                setApplicationMethod(
+                  event.target.value as ApplicationMethod
+                )
+              }
+              className="w-full rounded-md border p-3"
+            >
+              <option value="Platform">
+                Apply through HireSwipe
+              </option>
+              <option value="Email">
+                Apply through Email
+              </option>
+              <option value="External">
+                Apply through External Website
+              </option>
+            </select>
+          </div>
+
+          {/* Show HR email only for Email applications */}
+          {applicationMethod === "Email" && (
+            <div>
+              <label className="mb-2 block font-medium">
+                HR Application Email
+              </label>
+
+              <input
+                type="email"
+                value={applicationEmail}
+                onChange={(event) =>
+                  setApplicationEmail(event.target.value)
+                }
+                placeholder="e.g. careers@company.com"
+                required
+                className="w-full rounded-md border p-3"
+              />
+            </div>
+          )}
+
+          {/* Show application URL only for External applications */}
+          {applicationMethod === "External" && (
+            <div>
+              <label className="mb-2 block font-medium">
+                External Application URL
+              </label>
+
+              <input
+                type="url"
+                value={applicationUrl}
+                onChange={(event) =>
+                  setApplicationUrl(event.target.value)
+                }
+                placeholder="https://company.com/careers"
+                required
+                className="w-full rounded-md border p-3"
+              />
+            </div>
+          )}
 
           {message && (
             <p className="text-green-600">{message}</p>

@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -27,6 +28,8 @@ export default function ProfilePage() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
 
+  const [email, setEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
   const [bio, setBio] = useState("");
@@ -36,6 +39,8 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  const emailChanged = email.trim().toLowerCase() !== user?.email.toLowerCase();
 
   useEffect(() => {
     /**
@@ -63,6 +68,7 @@ export default function ProfilePage() {
         setUser(userData);
         setProfile(profileData);
 
+        setEmail(userData.email);
         setPhone(profileData.phone || "");
         setLocation(profileData.location || "");
         setBio(profileData.bio || "");
@@ -83,16 +89,21 @@ export default function ProfilePage() {
   }, []);
 
   /**
-   * Save the edited candidate profile.
+   * Save the edited candidate profile and email address.
    *
    * Returns:
-   *     None. Updates the profile after a successful API request.
+   *     None. Updates the user and profile after successful API requests.
    */
   async function handleSave() {
     try {
       setSaving(true);
       setError("");
       setSuccess("");
+
+      if (emailChanged && !currentPassword) {
+        setError("Enter your current password to change your email.");
+        return;
+      }
 
       const updatedProfile: CandidateProfile = await apiRequest(
         "/candidate/profile",
@@ -110,10 +121,26 @@ export default function ProfilePage() {
       );
 
       setProfile(updatedProfile);
-
       setPhone(updatedProfile.phone || "");
       setLocation(updatedProfile.location || "");
       setBio(updatedProfile.bio || "");
+
+      if (emailChanged) {
+        const updatedUser: User = await apiRequest("/auth/email", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            new_email: email.trim(),
+            current_password: currentPassword,
+          }),
+        });
+
+        setUser(updatedUser);
+        setEmail(updatedUser.email);
+        setCurrentPassword("");
+      }
 
       setEditing(false);
       setSuccess("Profile updated successfully.");
@@ -137,12 +164,14 @@ export default function ProfilePage() {
    *     None. Restores the existing profile data.
    */
   function handleCancel() {
-    if (profile) {
+    if (profile && user) {
+      setEmail(user.email);
       setPhone(profile.phone || "");
       setLocation(profile.location || "");
       setBio(profile.bio || "");
     }
 
+    setCurrentPassword("");
     setEditing(false);
     setError("");
     setSuccess("");
@@ -175,7 +204,6 @@ export default function ProfilePage() {
   return (
     <main className="min-h-screen bg-[#070b1a] px-6 py-10 text-white">
       <div className="mx-auto max-w-4xl">
-        {/* Back to dashboard */}
         <button
           onClick={() => router.push("/dashboard")}
           className="mb-8 text-sm font-medium text-blue-400 transition hover:text-blue-300"
@@ -183,7 +211,6 @@ export default function ProfilePage() {
           ← Back to Dashboard
         </button>
 
-        {/* Page heading */}
         <div className="mb-8">
           <p className="mb-2 text-sm font-semibold uppercase tracking-widest text-blue-400">
             HIREsWIPE
@@ -198,9 +225,7 @@ export default function ProfilePage() {
           </p>
         </div>
 
-        {/* Profile card */}
         <div className="rounded-2xl border border-blue-500/15 bg-gradient-to-br from-[#111936] to-[#0c1228] p-8 shadow-2xl shadow-black/20">
-          {/* Header */}
           <div className="mb-8 flex flex-col gap-4 border-b border-white/10 pb-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-bold text-white">
@@ -226,7 +251,6 @@ export default function ProfilePage() {
             )}
           </div>
 
-          {/* Messages */}
           {success && (
             <div className="mb-6 rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3 text-sm text-green-300">
               {success}
@@ -239,9 +263,7 @@ export default function ProfilePage() {
             </div>
           )}
 
-          {/* Profile details */}
           <div className="grid gap-6 md:grid-cols-2">
-            {/* Name */}
             <div className="rounded-xl border border-white/5 bg-black/10 p-5">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Name
@@ -252,18 +274,48 @@ export default function ProfilePage() {
               </p>
             </div>
 
-            {/* Email */}
             <div className="rounded-xl border border-white/5 bg-black/10 p-5">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Email
-              </p>
+              </label>
 
-              <p className="break-all text-lg font-semibold text-white">
-                {user.email}
-              </p>
+              {editing ? (
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="Enter your email address"
+                  required
+                  className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+                />
+              ) : (
+                <p className="break-all text-lg font-semibold text-white">
+                  {user.email}
+                </p>
+              )}
             </div>
 
-            {/* Phone */}
+            {editing && emailChanged && (
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5 md:col-span-2">
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Current Password
+                </label>
+
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  placeholder="Enter your current password"
+                  autoComplete="current-password"
+                  className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+                />
+
+                <p className="mt-2 text-xs text-slate-400">
+                  Required to verify your identity before changing your email.
+                </p>
+              </div>
+            )}
+
             <div className="rounded-xl border border-white/5 bg-black/10 p-5">
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Phone
@@ -284,7 +336,6 @@ export default function ProfilePage() {
               )}
             </div>
 
-            {/* Location */}
             <div className="rounded-xl border border-white/5 bg-black/10 p-5">
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Location
@@ -305,8 +356,7 @@ export default function ProfilePage() {
               )}
             </div>
 
-            {/* Bio */}
-            <div className="md:col-span-2 rounded-xl border border-white/5 bg-black/10 p-5">
+            <div className="rounded-xl border border-white/5 bg-black/10 p-5 md:col-span-2">
               <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Bio
               </label>
@@ -326,8 +376,7 @@ export default function ProfilePage() {
               )}
             </div>
 
-            {/* Resume */}
-            <div className="md:col-span-2 rounded-xl border border-blue-500/15 bg-blue-500/5 p-5">
+            <div className="rounded-xl border border-blue-500/15 bg-blue-500/5 p-5 md:col-span-2">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Resume
               </p>
@@ -345,7 +394,6 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* Editing buttons */}
           {editing && (
             <div className="mt-8 flex flex-wrap gap-3 border-t border-white/10 pt-6">
               <button
