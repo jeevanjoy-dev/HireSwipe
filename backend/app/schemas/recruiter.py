@@ -1,29 +1,38 @@
-from pydantic import BaseModel
+
+from pydantic import BaseModel, ConfigDict
 
 
 class RecruiterProfileCreate(BaseModel):
-    """Represent data required to create a recruiter profile.
-
-    Attributes:
-        designation: Job designation of the recruiter.
-        company_id: ID of the company associated with the recruiter.
-    """
+    """Represent data required to create a recruiter profile."""
 
     designation: str
-    company_id: int
+
+
+class RecruiterProfileUpdate(BaseModel):
+    """Represent editable recruiter-specific profile information."""
+
+    designation: str
+
+
+class CompanyProfileResponse(BaseModel):
+    """Represent company information within a recruiter profile."""
+
+    id: int
+    admin_user_id:int
+    name: str
+    description: str | None = None
+    location: str | None = None
+    website: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RecruiterProfileResponse(BaseModel):
-    """Represent recruiter profile information returned by the API.
-
-    Attributes:
-        id: Unique identifier of the recruiter profile.
-        user_id: ID of the user who owns the profile.
-        company_id: ID of the associated company.
-        designation: Job designation of the recruiter.
-    """
+    """Represent recruiter profile information returned by the API."""
 
     id: int
     user_id: int
-    company_id: int
     designation: str
+    company: CompanyProfileResponse
+
+    model_config = ConfigDict(from_attributes=True)

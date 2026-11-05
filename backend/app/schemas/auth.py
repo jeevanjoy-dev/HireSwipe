@@ -16,7 +16,7 @@ class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
-    role: Literal["candidate", "recruiter", "admin"]
+    role: Literal["candidate", "recruiter"]
 
 class LoginRequest(BaseModel):
     """Represent the credentials required for user login.

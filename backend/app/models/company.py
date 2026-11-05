@@ -1,6 +1,7 @@
+
 from typing import Optional
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -11,6 +12,7 @@ class Company(Base):
 
     Attributes:
         id: Unique identifier for the company.
+        admin_user_id: ID of the user who administers the company.
         name: Name of the company.
         description: Description of the company.
         location: Company's location.
@@ -22,6 +24,13 @@ class Company(Base):
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
+        index=True
+    )
+
+    admin_user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
         index=True
     )
 
@@ -45,7 +54,9 @@ class Company(Base):
         nullable=True
     )
 
+    admin = relationship("User", foreign_keys=[admin_user_id])
+
     recruiters = relationship(
-    "RecruiterProfile",
-    back_populates="company"
+        "RecruiterProfile",
+        back_populates="company"
     )

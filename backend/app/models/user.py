@@ -14,7 +14,7 @@ class User(Base):
         name: Full name of the user.
         email: Unique email address.
         password_hash: Hashed user password.
-        role: User role such as candidate, recruiter, or admin.
+        role: User role such as candidate, recruiter, company admin, or admin.
         created_at: Date and time when the account was created.
     """
 

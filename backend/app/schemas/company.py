@@ -33,3 +33,11 @@ class CompanyResponse(BaseModel):
     description: str | None = None
     location: str | None = None
     website: str | None = None
+
+class CompanyUpdate(BaseModel):
+    """Represent editable company information."""
+
+    name: str
+    description: str | None = None
+    location: str | None = None
+    website: str | None = None
