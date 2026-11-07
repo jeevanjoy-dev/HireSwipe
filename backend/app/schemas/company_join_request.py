@@ -28,3 +28,9 @@ class CompanyJoinRequestResponse(BaseModel):
     reviewed_by_user_id: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class CompanyJoinRequestAdminResponse(CompanyJoinRequestResponse):
+    """Include recruiter details for company admin notifications."""
+
+    recruiter_name: str
+    recruiter_email: str

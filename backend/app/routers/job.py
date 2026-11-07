@@ -1,3 +1,4 @@
+
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,13 +18,17 @@ router = APIRouter(
 )
 
 
+# --------------------------------------------------
+# CREATE JOB
+# --------------------------------------------------
+
 @router.post("/", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 def create_job(
     job_data: JobCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a new job for the authenticated recruiter.
+    """Create a new job for a recruiter associated with a company.
 
     Args:
         job_data: Information required to create the job.
@@ -34,8 +39,8 @@ def create_job(
         Job: The newly created job.
 
     Raises:
-        HTTPException: If the user is not a recruiter or does not
-            have a recruiter profile.
+        HTTPException: If the user is not a recruiter, does not have
+            a recruiter profile, or is not associated with a company.
     """
 
     if current_user.role != "recruiter":
@@ -44,6 +49,7 @@ def create_job(
             detail="Only recruiters can create jobs.",
         )
 
+    # Find the recruiter's profile.
     recruiter_profile = (
         db.query(RecruiterProfile)
         .filter(RecruiterProfile.user_id == current_user.id)
@@ -54,6 +60,13 @@ def create_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Recruiter profile not found.",
+        )
+
+    # Prevent recruiters without a company association from creating jobs.
+    if recruiter_profile.company_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be associated with a company to create a job.",
         )
 
     new_job = Job(
@@ -85,27 +98,18 @@ def create_job(
     db.refresh(new_job)
 
     return new_job
-    
 
+
+# --------------------------------------------------
+# GET MY JOBS
+# --------------------------------------------------
 
 @router.get("/my-jobs", response_model=list[JobResponse])
 def get_my_jobs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all jobs posted by the authenticated recruiter.
-
-    Args:
-        db: Database session used to retrieve jobs.
-        current_user: Authenticated recruiter requesting their jobs.
-
-    Returns:
-        list[Job]: Jobs owned by the authenticated recruiter.
-
-    Raises:
-        HTTPException: If the user is not a recruiter or does not
-            have a recruiter profile.
-    """
+    """Get all jobs posted by the authenticated recruiter."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -135,6 +139,10 @@ def get_my_jobs(
     return jobs
 
 
+# --------------------------------------------------
+# SEARCH AND FILTER JOBS
+# --------------------------------------------------
+
 @router.get("/", response_model=JobListResponse)
 def get_jobs(
     keyword: str | None = Query(default=None),
@@ -151,30 +159,7 @@ def get_jobs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Search and filter active jobs for the authenticated candidate.
-
-    Args:
-        keyword: Optional keyword used to search job title,
-            description, and requirements.
-        location: Optional location used to filter jobs.
-        job_type: Optional employment type used to filter jobs.
-        experience_min: Optional minimum years of experience used
-            to filter jobs.
-        experience_max: Optional maximum years of experience used
-            to filter jobs.
-        skip: Number of jobs to skip for pagination.
-        limit: Maximum number of jobs to return.
-        db: Database session used to retrieve jobs.
-        current_user: Authenticated candidate requesting jobs.
-
-    Returns:
-        JobListResponse: Paginated active jobs matching the filters,
-           along with pagination metadata.
-
-    Raises:
-        HTTPException: If the authenticated user is not a candidate
-            or the experience range is invalid.
-    """
+    """Search and filter active jobs for authenticated candidates."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -192,46 +177,46 @@ def get_jobs(
             detail="Minimum experience cannot be greater than maximum experience.",
         )
 
-    query = db.query(Job).filter(Job.is_active.is_(True))  # Only search active jobs
+    query = db.query(Job).filter(Job.is_active.is_(True))
 
     if keyword:
-        search_term = f"%{keyword}%"  # Add wildcards for partial matching
+        search_term = f"%{keyword}%"
 
-        query = query.filter(                         # Search title, description, and requirements
+        query = query.filter(
             (Job.title.ilike(search_term))
             | (Job.description.ilike(search_term))
             | (Job.requirements.ilike(search_term))
         )
 
     if location:
-        query = query.filter(                         # Filter jobs by location
+        query = query.filter(
             Job.location.ilike(f"%{location}%")
         )
 
     if job_type:
-        query = query.filter(                         # Filter jobs by employment type
+        query = query.filter(
             Job.job_type == job_type
         )
 
     if experience_min is not None:
-        query = query.filter(                         # Match jobs whose maximum overlaps the selected minimum
+        query = query.filter(
             (Job.experience_max.is_(None))
             | (Job.experience_max >= experience_min)
         )
 
     if experience_max is not None:
-        query = query.filter(                         # Match jobs whose minimum overlaps the selected maximum
+        query = query.filter(
             (Job.experience_min.is_(None))
             | (Job.experience_min <= experience_max)
         )
 
-    total = query.count()                         # Count all jobs matching the filters
+    total = query.count()
 
     jobs = (
         query
-        .order_by(Job.created_at.desc())           # Show newest jobs first
-        .offset(skip)                              # Skip previous results
-        .limit(limit)                              # Limit returned results
+        .order_by(Job.created_at.desc())
+        .offset(skip)
+        .limit(limit)
         .all()
     )
 
@@ -242,26 +227,18 @@ def get_jobs(
         jobs=jobs,
     )
 
-    
+
+# --------------------------------------------------
+# GET JOB DETAILS
+# --------------------------------------------------
+
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get an active job by its ID.
-
-    Args:
-        job_id: Unique identifier of the job.
-        db: Database session used to query the job.
-        current_user: Authenticated user requesting the job.
-
-    Returns:
-        JobResponse containing the requested active job.
-
-    Raises:
-        HTTPException: If the job does not exist or is inactive.
-    """
+    """Get an active job by its ID."""
 
     job = (
         db.query(Job)
@@ -280,6 +257,11 @@ def get_job(
 
     return job
 
+
+# --------------------------------------------------
+# UPDATE JOB
+# --------------------------------------------------
+
 @router.put("/{job_id}", response_model=JobResponse)
 def update_job(
     job_id: int,
@@ -287,22 +269,7 @@ def update_job(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update a job owned by the authenticated recruiter.
-
-    Args:
-        job_id: ID of the job to update.
-        job_data: Updated job information.
-        db: Database session used to update the job.
-        current_user: Authenticated recruiter.
-
-    Returns:
-        Job: The updated job.
-
-    Raises:
-        HTTPException: If the user is not a recruiter, the recruiter
-            profile does not exist, the job does not exist, the recruiter
-            does not own the job, or an experience/salary range is invalid.
-    """
+    """Update a job owned by the authenticated recruiter."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -342,25 +309,10 @@ def update_job(
 
     update_data = job_data.model_dump(exclude_unset=True)
 
-    new_salary_min = update_data.get(
-        "salary_min",
-        job.salary_min,
-    )
-
-    new_salary_max = update_data.get(
-        "salary_max",
-        job.salary_max,
-    )
-
-    new_experience_min = update_data.get(
-        "experience_min",
-        job.experience_min,
-    )
-
-    new_experience_max = update_data.get(
-        "experience_max",
-        job.experience_max,
-    )
+    new_salary_min = update_data.get("salary_min", job.salary_min)
+    new_salary_max = update_data.get("salary_max", job.salary_max)
+    new_experience_min = update_data.get("experience_min", job.experience_min)
+    new_experience_max = update_data.get("experience_max", job.experience_max)
 
     if (
         new_experience_min is not None
@@ -391,24 +343,17 @@ def update_job(
     return job
 
 
+# --------------------------------------------------
+# DELETE JOB
+# --------------------------------------------------
+
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job(
     job_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Delete a job owned by the authenticated recruiter.
-
-    Args:
-        job_id: ID of the job to delete.
-        db: Database session used to delete the job.
-        current_user: Authenticated recruiter.
-
-    Raises:
-        HTTPException: If the user is not a recruiter, the recruiter
-            profile does not exist, the job does not exist, or the
-            recruiter does not own the job.
-    """
+    """Delete a job owned by the authenticated recruiter."""
 
     if current_user.role != "recruiter":
         raise HTTPException(

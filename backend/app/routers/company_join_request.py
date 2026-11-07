@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from app.models.user import User
 
 from app.database import get_db
 from app.dependencies.auth import get_current_user
@@ -13,6 +14,7 @@ from app.schemas.company_join_request import (
     CompanyJoinRequestCreate,
     CompanyJoinRequestReview,
     CompanyJoinRequestResponse,
+    CompanyJoinRequestAdminResponse,
 )
 
 
@@ -106,38 +108,67 @@ def get_my_join_requests(
     ).order_by(CompanyJoinRequest.created_at.desc()).all()
 
 
+# --------------------------------------------------
+# VIEW PENDING JOIN REQUESTS (COMPANY ADMIN)
+# --------------------------------------------------
+
 @router.get(
-    "/company/{company_id}",
-    response_model=list[CompanyJoinRequestResponse]
+    "/join-requests/company/{company_id}",
+    response_model=list[CompanyJoinRequestAdminResponse],
 )
 def get_company_join_requests(
     company_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Allow only the company admin to view incoming requests."""
+    """Return pending join requests with recruiter details."""
 
-    company = db.query(Company).filter(
-        Company.id == company_id
-    ).first()
+    company = (
+        db.query(Company)
+        .filter(Company.id == company_id)
+        .first()
+    )
 
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
+            detail="Company not found.",
         )
 
     if company.admin_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the company admin can view join requests."
+            detail="Only the company admin can view join requests.",
         )
 
-    return db.query(CompanyJoinRequest).filter(
-        CompanyJoinRequest.company_id == company_id,
-        CompanyJoinRequest.status == "pending"
-    ).order_by(CompanyJoinRequest.created_at.desc()).all()
+    requests = (
+        db.query(CompanyJoinRequest, User)
+        .join(
+            User,
+            User.id == CompanyJoinRequest.recruiter_id,
+        )
+        .filter(
+            CompanyJoinRequest.company_id == company_id,
+            CompanyJoinRequest.status == "pending",
+        )
+        .order_by(CompanyJoinRequest.created_at.desc())
+        .all()
+    )
 
+    return [
+        {
+            "id": request.id,
+            "recruiter_id": request.recruiter_id,
+            "company_id": request.company_id,
+            "status": request.status,
+            "created_at": request.created_at,
+            "reviewed_at": request.reviewed_at,
+            "reviewed_by_user_id": request.reviewed_by_user_id,
+            "recruiter_name": recruiter.name,
+            "recruiter_email": recruiter.email,
+        }
+        for request, recruiter in requests
+    ]
 
 @router.put(
     "/{request_id}",

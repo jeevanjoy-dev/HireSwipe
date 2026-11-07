@@ -8,7 +8,6 @@ from app.routers import job
 from app.routers import application
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import savedjob
-from app.routers import company_join_request
 
 
 app = FastAPI(
@@ -42,7 +41,6 @@ app.include_router(application.router)
 
 app.include_router(savedjob.router)
 
-app.include_router(company_join_request.router)
 
 
 @app.get("/")

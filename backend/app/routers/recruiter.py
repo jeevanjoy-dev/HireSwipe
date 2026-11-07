@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -26,6 +25,7 @@ router = APIRouter(
 # CREATE RECRUITER PROFILE
 # --------------------------------------------------
 
+
 @router.post(
     "/profile",
     response_model=RecruiterProfileResponse,
@@ -36,43 +36,22 @@ def create_recruiter_profile(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-
-    # Only recruiters can create recruiter profiles
+    # Only recruiters can create or complete recruiter profiles.
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only recruiters can create recruiter profiles.",
         )
 
-    # Check whether profile already exists
-    existing_profile = (
-        db.query(RecruiterProfile)
-        .filter(
-            RecruiterProfile.user_id == current_user.id
-        )
-        .first()
-    )
-
-    if existing_profile:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Recruiter profile already exists.",
-        )
-
-    company = None
-
-    # CASE 1: Recruiter is the Company Admin
+    # Find the company administered by this recruiter.
     company = (
         db.query(Company)
-        .filter(
-            Company.admin_user_id == current_user.id
-        )
+        .filter(Company.admin_user_id == current_user.id)
         .first()
     )
 
-    # CASE 2: Recruiter joined an existing company
+    # Otherwise, find the recruiter's latest approved join request.
     if not company:
-
         approved_request = (
             db.query(CompanyJoinRequest)
             .filter(
@@ -94,7 +73,7 @@ def create_recruiter_profile(
                 .first()
             )
 
-    # Reject if no company association exists
+    # Company association is mandatory.
     if not company:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -105,7 +84,37 @@ def create_recruiter_profile(
             ),
         )
 
-    # Create recruiter profile
+    # Check whether a recruiter profile already exists.
+    existing_profile = (
+        db.query(RecruiterProfile)
+        .filter(
+            RecruiterProfile.user_id == current_user.id
+        )
+        .first()
+    )
+
+    # Reuse an existing profile instead of creating a duplicate.
+    if existing_profile:
+
+        # Prevent accidental reassignment to another company.
+        if (
+            existing_profile.company_id is not None
+            and existing_profile.company_id != company.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You are already associated with another company.",
+            )
+
+        existing_profile.company_id = company.id
+        existing_profile.designation = profile_data.designation
+
+        db.commit()
+        db.refresh(existing_profile)
+
+        return existing_profile
+
+    # Create a new profile only when one does not exist.
     new_profile = RecruiterProfile(
         user_id=current_user.id,
         company_id=company.id,
@@ -159,6 +168,10 @@ def get_recruiter_profile(
 # UPDATE RECRUITER PROFILE
 # --------------------------------------------------
 
+# --------------------------------------------------
+# UPDATE RECRUITER PROFILE
+# --------------------------------------------------
+
 @router.put(
     "/profile",
     response_model=RecruiterProfileResponse,
@@ -189,10 +202,12 @@ def update_recruiter_profile(
             detail="Recruiter profile not found.",
         )
 
-    # Recruiters can update only their designation
+    # Update the authenticated recruiter's own details.
+    current_user.name = profile_data.name
     profile.designation = profile_data.designation
 
     db.commit()
     db.refresh(profile)
+    db.refresh(current_user)
 
     return profile

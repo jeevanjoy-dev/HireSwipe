@@ -10,6 +10,7 @@ from app.dependencies.auth import get_current_user
 from app.models.company import Company
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.company_join_request import CompanyJoinRequest
+from app.models.user import User
 
 from app.schemas.company import (
     CompanyCreate,
@@ -21,21 +22,32 @@ from app.schemas.company_join_request import (
     CompanyJoinRequestCreate,
     CompanyJoinRequestReview,
     CompanyJoinRequestResponse,
+    CompanyJoinRequestAdminResponse,
+
+)
+
+from app.schemas.recruiter import (
+    CompanyRecruiterResponse,
+    CompanyRecruiterUpdate,
 )
 
 
 router = APIRouter(
     prefix="/companies",
-    tags=["Company"]
+    tags=["Company"],
 )
 
+
+# --------------------------------------------------
+# COMPANY ACCESS CHECK
+# --------------------------------------------------
 
 def check_company_access(
     company_id: int,
     current_user,
-    db: Session
+    db: Session,
 ):
-    """Verify that the user is the company admin or an associated recruiter."""
+    """Check whether the current user belongs to the requested company."""
 
     company = (
         db.query(Company)
@@ -46,7 +58,7 @@ def check_company_access(
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
+            detail="Company not found.",
         )
 
     is_admin = company.admin_user_id == current_user.id
@@ -55,7 +67,7 @@ def check_company_access(
         db.query(RecruiterProfile)
         .filter(
             RecruiterProfile.user_id == current_user.id,
-            RecruiterProfile.company_id == company_id
+            RecruiterProfile.company_id == company_id,
         )
         .first()
     )
@@ -63,7 +75,7 @@ def check_company_access(
     if not is_admin and not is_recruiter:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this company."
+            detail="You don't have access to this company.",
         )
 
     return company
@@ -76,35 +88,21 @@ def check_company_access(
 @router.post(
     "/",
     response_model=CompanyResponse,
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
 )
 def create_company(
     company_data: CompanyCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Create a company and assign its creator as company admin."""
+    """Create a company and assign its creator as Company Admin."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only recruiters can create a company."
+            detail="Only recruiters can create a company.",
         )
 
-    # Prevent users already associated with a company from creating another.
-    existing_profile = (
-        db.query(RecruiterProfile)
-        .filter(RecruiterProfile.user_id == current_user.id)
-        .first()
-    )
-
-    if existing_profile and existing_profile.company_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are already associated with a company."
-        )
-
-    # Prevent duplicate company creation by an existing admin.
     existing_company = (
         db.query(Company)
         .filter(Company.admin_user_id == current_user.id)
@@ -114,7 +112,19 @@ def create_company(
     if existing_company:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already administer a company."
+            detail="You already administer a company.",
+        )
+
+    existing_profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if existing_profile and existing_profile.company_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You are already associated with a company.",
         )
 
     company = Company(
@@ -122,18 +132,90 @@ def create_company(
         name=company_data.name,
         description=company_data.description,
         location=company_data.location,
-        website=company_data.website
+        website=company_data.website,
     )
 
     db.add(company)
-    db.flush()
 
-    # Associate an existing profile if one exists.
-    if existing_profile:
-        existing_profile.company_id = company.id
+    try:
+        db.flush()
 
-    db.commit()
-    db.refresh(company)
+        # Reuse a legacy unassociated profile if one already exists.
+        if existing_profile:
+            existing_profile.company_id = company.id
+
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return company
+
+
+# --------------------------------------------------
+# GET COMPANY LIST / SEARCH COMPANIES
+# --------------------------------------------------
+
+@router.get(
+    "/",
+    response_model=list[CompanyResponse],
+)
+def get_companies(
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Search existing companies for recruiter join requests."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can search companies.",
+        )
+
+    query = db.query(Company)
+
+    if search:
+        query = query.filter(
+            Company.name.ilike(f"%{search}%")
+        )
+
+    return query.order_by(Company.name.asc()).limit(50).all()
+
+
+# --------------------------------------------------
+# GET COMPANY CREATED BY CURRENT RECRUITER
+# --------------------------------------------------
+
+@router.get(
+    "/my-admin-company",
+    response_model=CompanyResponse,
+)
+def get_my_admin_company(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return the company administered by the current recruiter."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can access this endpoint.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not administer a company.",
+        )
 
     return company
 
@@ -144,22 +226,20 @@ def create_company(
 
 @router.get(
     "/{company_id}",
-    response_model=CompanyResponse
+    response_model=CompanyResponse,
 )
 def get_company(
     company_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Retrieve company details for its admin or associated recruiters."""
+    """Return company details to its admin or associated recruiters."""
 
-    company = check_company_access(
+    return check_company_access(
         company_id,
         current_user,
-        db
+        db,
     )
-
-    return company
 
 
 # --------------------------------------------------
@@ -168,15 +248,15 @@ def get_company(
 
 @router.put(
     "/{company_id}",
-    response_model=CompanyResponse
+    response_model=CompanyResponse,
 )
 def update_company(
     company_id: int,
     company_data: CompanyUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Allow only the company admin to update company details."""
+    """Allow only the Company Admin to update company details."""
 
     company = (
         db.query(Company)
@@ -187,13 +267,13 @@ def update_company(
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
+            detail="Company not found.",
         )
 
     if company.admin_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the company admin can edit company details."
+            detail="Only the company admin can edit company details.",
         )
 
     company.name = company_data.name
@@ -214,19 +294,19 @@ def update_company(
 @router.post(
     "/join-requests",
     response_model=CompanyJoinRequestResponse,
-    status_code=status.HTTP_201_CREATED
+    status_code=status.HTTP_201_CREATED,
 )
 def create_join_request(
     request_data: CompanyJoinRequestCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Allow a recruiter user to request to join an existing company."""
+    """Allow an unassociated recruiter to request company membership."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only recruiters can request to join a company."
+            detail="Only recruiters can request to join a company.",
         )
 
     company = (
@@ -238,35 +318,49 @@ def create_join_request(
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
+            detail="Company not found.",
         )
 
     if company.admin_user_id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You are already the admin of this company."
+            detail="You are already the admin of this company.",
         )
 
-    # A user can only be associated with one company.
+    # A recruiter who already belongs to a company cannot request another.
     existing_profile = (
         db.query(RecruiterProfile)
-        .filter(RecruiterProfile.user_id == current_user.id)
+        .filter(
+            RecruiterProfile.user_id == current_user.id,
+            RecruiterProfile.company_id.isnot(None),
+        )
         .first()
     )
 
     if existing_profile:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have a recruiter profile."
+            detail="You are already associated with a company.",
         )
 
-    # Prevent duplicate pending requests.
+    existing_admin_company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .first()
+    )
+
+    if existing_admin_company:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You already administer a company.",
+        )
+
+    # Do not allow another pending request for a different company either.
     existing_request = (
         db.query(CompanyJoinRequest)
         .filter(
             CompanyJoinRequest.recruiter_id == current_user.id,
-            CompanyJoinRequest.company_id == company.id,
-            CompanyJoinRequest.status == "pending"
+            CompanyJoinRequest.status == "pending",
         )
         .first()
     )
@@ -274,13 +368,29 @@ def create_join_request(
     if existing_request:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have a pending request for this company."
+            detail="You already have a pending company join request.",
+        )
+
+    # Do not allow reuse of an old approved request to join another company.
+    approved_request = (
+        db.query(CompanyJoinRequest)
+        .filter(
+            CompanyJoinRequest.recruiter_id == current_user.id,
+            CompanyJoinRequest.status == "approved",
+        )
+        .first()
+    )
+
+    if approved_request:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You already have an approved company association.",
         )
 
     join_request = CompanyJoinRequest(
         recruiter_id=current_user.id,
         company_id=company.id,
-        status="pending"
+        status="pending",
     )
 
     db.add(join_request)
@@ -291,19 +401,52 @@ def create_join_request(
 
 
 # --------------------------------------------------
-# VIEW COMPANY JOIN REQUESTS
+# GET JOIN REQUESTS OF CURRENT RECRUITER
 # --------------------------------------------------
 
 @router.get(
+    "/join-requests/me",
+    response_model=list[CompanyJoinRequestResponse],
+)
+def get_my_join_requests(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return all join requests submitted by the current recruiter."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can view join requests.",
+        )
+
+    requests = (
+        db.query(CompanyJoinRequest)
+        .filter(
+            CompanyJoinRequest.recruiter_id == current_user.id
+        )
+        .order_by(CompanyJoinRequest.created_at.desc())
+        .all()
+    )
+
+    return requests
+
+
+# --------------------------------------------------
+# VIEW COMPANY JOIN REQUESTS (COMPANY ADMIN)
+# --------------------------------------------------
+
+
+@router.get(
     "/join-requests/company/{company_id}",
-    response_model=list[CompanyJoinRequestResponse]
+    response_model=list[CompanyJoinRequestAdminResponse],
 )
 def get_company_join_requests(
     company_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Allow the company admin to view requests for their company."""
+    """Return only pending join requests with recruiter details."""
 
     company = (
         db.query(Company)
@@ -314,53 +457,71 @@ def get_company_join_requests(
     if not company:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Company not found."
+            detail="Company not found.",
         )
 
     if company.admin_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the company admin can view join requests."
+            detail="Only the company admin can view join requests.",
         )
 
     requests = (
-        db.query(CompanyJoinRequest)
+        db.query(CompanyJoinRequest, User)
+        .join(
+            User,
+            User.id == CompanyJoinRequest.recruiter_id,
+        )
         .filter(
-            CompanyJoinRequest.company_id == company_id
+            CompanyJoinRequest.company_id == company_id,
+            CompanyJoinRequest.status == "pending",
         )
         .order_by(CompanyJoinRequest.created_at.desc())
         .all()
     )
 
-    return requests
+    return [
+        {
+            "id": request.id,
+            "recruiter_id": request.recruiter_id,
+            "company_id": request.company_id,
+            "status": request.status,
+            "created_at": request.created_at,
+            "reviewed_at": request.reviewed_at,
+            "reviewed_by_user_id": request.reviewed_by_user_id,
+            "recruiter_name": recruiter.name,
+            "recruiter_email": recruiter.email,
+        }
+        for request, recruiter in requests
+    ]
 
 
 # --------------------------------------------------
-# REVIEW COMPANY JOIN REQUEST
+# APPROVE / REJECT COMPANY JOIN REQUEST
 # --------------------------------------------------
 
 @router.put(
     "/join-requests/{request_id}",
-    response_model=CompanyJoinRequestResponse
+    response_model=CompanyJoinRequestResponse,
 )
 def review_join_request(
     request_id: int,
     review_data: CompanyJoinRequestReview,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
-    """Allow the company admin to approve or reject a join request."""
+    """Allow the Company Admin to approve or reject a join request."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can review join requests."
+            detail="Only company admins can review join requests.",
         )
 
     if review_data.status not in ["approved", "rejected"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Status must be approved or rejected."
+            detail="Status must be approved or rejected.",
         )
 
     join_request = (
@@ -373,7 +534,7 @@ def review_join_request(
     if not join_request:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Join request not found."
+            detail="Join request not found.",
         )
 
     company = (
@@ -385,18 +546,23 @@ def review_join_request(
     if not company or company.admin_user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the admin of this company can review this request."
+            detail="Only the admin of this company can review this request.",
         )
 
     if join_request.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This request has already been reviewed."
+            detail="This request has already been reviewed.",
         )
 
     if review_data.status == "approved":
+        # Ensure the recruiter has not joined another company in the meantime.
+        existing_admin_company = (
+            db.query(Company)
+            .filter(Company.admin_user_id == join_request.recruiter_id)
+            .first()
+        )
 
-        # Ensure the recruiter has not joined another company.
         existing_profile = (
             db.query(RecruiterProfile)
             .filter(
@@ -405,11 +571,22 @@ def review_join_request(
             .first()
         )
 
-        if existing_profile:
+        if existing_admin_company:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The recruiter already has a recruiter profile."
+                detail="The recruiter already administers a company.",
             )
+
+        if existing_profile and existing_profile.company_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The recruiter is already associated with a company.",
+            )
+
+        # Reattach a legacy profile if one exists without a company.
+        # New recruiters create their profile after approval.
+        if existing_profile:
+            existing_profile.company_id = company.id
 
     join_request.status = review_data.status
     join_request.reviewed_at = datetime.utcnow()
@@ -419,3 +596,222 @@ def review_join_request(
     db.refresh(join_request)
 
     return join_request
+
+
+# --------------------------------------------------
+# VIEW SECONDARY RECRUITERS (COMPANY ADMIN)
+# --------------------------------------------------
+
+@router.get(
+    "/{company_id}/recruiters",
+    response_model=list[CompanyRecruiterResponse],
+)
+def get_company_recruiters(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return all secondary recruiters belonging to the company."""
+
+    company = (
+        db.query(Company)
+        .filter(Company.id == company_id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Company not found.",
+        )
+
+    if company.admin_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the company admin can manage recruiters.",
+        )
+
+    recruiters = (
+        db.query(RecruiterProfile, User)
+        .join(User, RecruiterProfile.user_id == User.id)
+        .filter(
+            RecruiterProfile.company_id == company_id,
+            RecruiterProfile.user_id != company.admin_user_id,
+        )
+        .all()
+    )
+
+    return [
+        {
+            "id": profile.id,
+            "user_id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "designation": profile.designation,
+        }
+        for profile, user in recruiters
+    ]
+
+
+# --------------------------------------------------
+# UPDATE SECONDARY RECRUITER (COMPANY ADMIN)
+# --------------------------------------------------
+
+@router.put(
+    "/{company_id}/recruiters/{user_id}",
+    response_model=CompanyRecruiterResponse,
+)
+def update_company_recruiter(
+    company_id: int,
+    user_id: int,
+    recruiter_data: CompanyRecruiterUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Allow the Company Admin to update a secondary recruiter."""
+
+    company = (
+        db.query(Company)
+        .filter(Company.id == company_id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Company not found.",
+        )
+
+    if company.admin_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the company admin can edit recruiters.",
+        )
+
+    if user_id == company.admin_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use your own recruiter profile to update your details.",
+        )
+
+    profile = (
+        db.query(RecruiterProfile)
+        .filter(
+            RecruiterProfile.user_id == user_id,
+            RecruiterProfile.company_id == company_id,
+        )
+        .first()
+    )
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter not found in this company.",
+        )
+
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    existing_email = (
+        db.query(User)
+        .filter(
+            User.email == recruiter_data.email,
+            User.id != user_id,
+        )
+        .first()
+    )
+
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This email address is already registered.",
+        )
+
+    user.name = recruiter_data.name
+    user.email = recruiter_data.email
+    profile.designation = recruiter_data.designation
+
+    db.commit()
+    db.refresh(user)
+    db.refresh(profile)
+
+    return {
+        "id": profile.id,
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "designation": profile.designation,
+    }
+
+
+# --------------------------------------------------
+# REMOVE SECONDARY RECRUITER FROM COMPANY
+# --------------------------------------------------
+
+@router.delete(
+    "/{company_id}/recruiters/{user_id}",
+)
+def remove_company_recruiter(
+    company_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Unlink a secondary recruiter without deleting their account."""
+
+    company = (
+        db.query(Company)
+        .filter(Company.id == company_id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Company not found.",
+        )
+
+    if company.admin_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the company admin can remove recruiters.",
+        )
+
+    if user_id == company.admin_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Company Admin cannot remove themselves.",
+        )
+
+    profile = (
+        db.query(RecruiterProfile)
+        .filter(
+            RecruiterProfile.user_id == user_id,
+            RecruiterProfile.company_id == company_id,
+        )
+        .first()
+    )
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter not found in this company.",
+        )
+
+    # Preserve the recruiter's account and historical job records.
+    profile.company_id = None
+
+    db.commit()
+
+    return {
+        "message": "Recruiter successfully removed from the company."
+    }
