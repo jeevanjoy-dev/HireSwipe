@@ -1,35 +1,28 @@
+
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Integer, String, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
 class User(Base):
-    """Represent a HireSwipe user.
+    """Represent a HireSwipe user."""
 
-    Attributes:
-        id: Unique identifier for the user.
-        name: Full name of the user.
-        email: Unique email address.
-        password_hash: Hashed user password.
-        role: User role such as candidate, recruiter, company admin, or admin.
-        created_at: Date and time when the account was created.
-    """
+    __tablename__ = "users"
 
     candidate_profile = relationship(
-       "CandidateProfile",
-       back_populates="user",
-       uselist=False
+        "CandidateProfile",
+        back_populates="user",
+        uselist=False
     )
 
     recruiter_profile = relationship(
-       "RecruiterProfile",
-       back_populates="user",
-       uselist=False
+        "RecruiterProfile",
+        back_populates="user",
+        uselist=False
     )
-    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -46,6 +39,23 @@ class User(Base):
         String(255),
         unique=True,
         index=True,
+        nullable=False
+    )
+
+    phone: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True
+    )
+
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    phone_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
         nullable=False
     )
 
