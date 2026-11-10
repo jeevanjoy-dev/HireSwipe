@@ -5,29 +5,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
-class RegisterRequest(BaseModel):
-    """Data required to register a new user."""
+# --------------------------------------------------
+# COMMON TYPES
+# --------------------------------------------------
 
-    name: str
-    email: EmailStr
-    phone: str = Field(min_length=7, max_length=20)
-    password: str
-    role: Literal["candidate", "recruiter"]
+UserRole = Literal["candidate", "recruiter"]
 
 
-class LoginRequest(BaseModel):
-    """Credentials required for user login."""
-
-    email: EmailStr
-    password: str
-
-
-class TokenResponse(BaseModel):
-    """JWT authentication response."""
-
-    access_token: str
-    token_type: str
-
+# --------------------------------------------------
+# USER RESPONSE
+# --------------------------------------------------
 
 class UserResponse(BaseModel):
     """Safe user information returned by the API."""
@@ -38,23 +25,41 @@ class UserResponse(BaseModel):
     name: str
     email: EmailStr
     phone: str | None = None
+    email_verified: bool
+    phone_verified: bool
     role: str
     created_at: datetime
 
 
-class EmailUpdateRequest(BaseModel):
-    """Data required to update a user's email address."""
+# --------------------------------------------------
+# JWT RESPONSE
+# --------------------------------------------------
 
-    new_email: EmailStr
-    current_password: str
+class TokenResponse(BaseModel):
+    """JWT authentication response."""
 
+    access_token: str
+    token_type: str = "bearer"
+
+
+class AuthResponse(BaseModel):
+    """Authentication response with user information."""
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+# --------------------------------------------------
+# EMAIL REGISTRATION
+# --------------------------------------------------
 
 class RegistrationStartRequest(BaseModel):
+    """Information required to start email registration."""
+
     name: str = Field(min_length=2, max_length=100)
     email: EmailStr
-    phone: str = Field(min_length=7, max_length=20)
-    password: str = Field(min_length=8)
-    role: str = Field(pattern="^(candidate|recruiter)$")
+    role: UserRole
 
 
 class RegistrationStartResponse(BaseModel):
@@ -63,21 +68,71 @@ class RegistrationStartResponse(BaseModel):
 
 
 class OTPVerificationRequest(BaseModel):
+    """Email OTP verification request."""
+
     registration_token: str
     otp: str = Field(pattern=r"^\d{6}$")
 
 
 class RegistrationStatusResponse(BaseModel):
     email_verified: bool
-    phone_verified: bool
     message: str
-
-
-class RegistrationTokenRequest(BaseModel):
-    registration_token: str
 
 
 class RegistrationCompleteResponse(BaseModel):
     message: str
     user: UserResponse
 
+
+# --------------------------------------------------
+# EMAIL OTP LOGIN
+# --------------------------------------------------
+
+class EmailLoginRequest(BaseModel):
+    """Request an OTP for an existing account."""
+
+    email: EmailStr
+
+
+class EmailLoginStartResponse(BaseModel):
+    """Response after initiating email login."""
+
+    challenge_token: str
+    message: str
+
+
+class EmailLoginOTPVerifyRequest(BaseModel):
+    """Verify the login OTP."""
+
+    challenge_token: str
+    otp: str = Field(pattern=r"^\d{6}$")
+
+
+# --------------------------------------------------
+# GOOGLE AUTHENTICATION
+# --------------------------------------------------
+
+class GoogleAuthRequest(BaseModel):
+    """Google Sign-In request."""
+
+    id_token: str
+    role: UserRole | None = None
+
+
+# --------------------------------------------------
+# EMAIL UPDATE
+# --------------------------------------------------
+
+class EmailUpdateRequest(BaseModel):
+    """Request to change an account email."""
+
+    new_email: EmailStr
+    otp: str = Field(pattern=r"^\d{6}$")
+
+
+# --------------------------------------------------
+# REGISTRATION TOKEN
+# --------------------------------------------------
+
+class RegistrationTokenRequest(BaseModel):
+    registration_token: str

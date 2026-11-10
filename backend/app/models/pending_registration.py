@@ -2,10 +2,10 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     Integer,
     String,
+    Boolean,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,7 +13,7 @@ from app.database import Base
 
 
 class PendingRegistration(Base):
-    """Temporarily store an account awaiting email and phone verification."""
+    """Temporarily store an account awaiting email verification."""
 
     __tablename__ = "pending_registrations"
 
@@ -41,16 +41,6 @@ class PendingRegistration(Base):
         index=True,
     )
 
-    phone: Mapped[str] = mapped_column(
-        String(20),
-        nullable=False,
-    )
-
-    password_hash: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-    )
-
     role: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -61,18 +51,7 @@ class PendingRegistration(Base):
         nullable=True,
     )
 
-    phone_otp_hash: Mapped[str | None] = mapped_column(
-        String(64),
-        nullable=True,
-    )
-
     email_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    phone_verified: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
@@ -83,29 +62,13 @@ class PendingRegistration(Base):
         nullable=True,
     )
 
-    phone_otp_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
-        nullable=True,
-    )
-
     email_otp_attempts: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
 
-    phone_otp_attempts: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
     email_last_sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
-        nullable=True,
-    )
-
-    phone_last_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,
     )
