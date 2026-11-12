@@ -1,5 +1,14 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    UploadFile,
+    File,
+    Form,
+)
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Literal
 
@@ -16,6 +25,13 @@ from app.schemas.application import (
     ApplicationResponse,
     ApplicationStatusUpdate,
 )
+from app.services.file_storage import (
+    save_upload,
+    get_stored_file,
+    ALLOWED_RESUME_EXTENSIONS,
+    MAX_RESUME_SIZE,
+)
+
 
 router = APIRouter(
     prefix="/applications",
@@ -23,31 +39,27 @@ router = APIRouter(
 )
 
 
+# --------------------------------------------------
+# APPLY FOR A JOB
+# --------------------------------------------------
+
 @router.post(
     "/",
     response_model=ApplicationResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def apply_for_job(
-    application_data: ApplicationCreate,
+async def apply_for_job(
+    job_id: int = Form(...),
+    about_yourself: str = Form(
+        ...,
+        min_length=20,
+        max_length=2000,
+    ),
+    resume: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Submit a job application for the authenticated candidate.
-
-    Args:
-        application_data: Job ID and candidate introduction.
-        db: Database session used to access application data.
-        current_user: Authenticated user submitting the application.
-
-    Returns:
-        Application: The newly created job application.
-
-    Raises:
-        HTTPException: If the user is not a candidate, the candidate
-            profile does not exist, the job does not exist, or the
-            candidate has already applied for the job.
-    """
+    """Submit a platform job application with a mandatory resume."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -70,7 +82,7 @@ def apply_for_job(
     job = (
         db.query(Job)
         .filter(
-            Job.id == application_data.job_id,
+            Job.id == job_id,
             Job.is_active.is_(True),
         )
         .first()
@@ -80,6 +92,12 @@ def apply_for_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Active job not found.",
+        )
+
+    if job.application_method != "Platform":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This job does not accept applications through HireSwipe.",
         )
 
     existing_application = (
@@ -97,36 +115,62 @@ def apply_for_job(
             detail="You have already applied for this job.",
         )
 
-    application = Application(
-        candidate_id=candidate_profile.id,
-        job_id=job.id,
-        about_yourself=application_data.about_yourself,
-    )
+    if not resume.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A resume is required to apply.",
+        )
 
-    db.add(application)
-    db.commit()
-    db.refresh(application)
+    resume_key = None
 
-    return application
+    try:
+        resume_key = await save_upload(
+            upload=resume,
+            category="application_resumes",
+            allowed_extensions=ALLOWED_RESUME_EXTENSIONS,
+            max_size=MAX_RESUME_SIZE,
+        )
+
+        application = Application(
+            candidate_id=candidate_profile.id,
+            job_id=job.id,
+            about_yourself=about_yourself,
+            resume=resume_key,
+        )
+
+        db.add(application)
+        db.commit()
+        db.refresh(application)
+
+        return application
+
+    except Exception:
+        db.rollback()
+
+        if resume_key:
+            from app.services.file_storage import delete_stored_file
+            delete_stored_file(resume_key)
+
+        raise
+
+    finally:
+        await resume.close()
+
+
+# --------------------------------------------------
+# GET MY APPLICATIONS
+# --------------------------------------------------
 
 
 @router.get(
     "/my-applications",
-    response_model=list[ApplicationResponse],
+    response_model=list[ApplicationDetailResponse],
 )
 def get_my_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get all applications submitted by the authenticated candidate.
-
-    Args:
-        db: Database session used to retrieve applications.
-        current_user: Authenticated candidate requesting their applications.
-
-    Returns:
-        list[Application]: Applications submitted by the current candidate.
-    """
+    """Get detailed applications submitted by the authenticated candidate."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -148,6 +192,7 @@ def get_my_applications(
 
     applications = (
         db.query(Application)
+        .join(Job, Application.job_id == Job.id)
         .filter(
             Application.candidate_id == candidate_profile.id,
             Application.is_archived.is_(False),
@@ -156,8 +201,27 @@ def get_my_applications(
         .all()
     )
 
-    return applications
+    return [
+        ApplicationDetailResponse(
+            id=application.id,
+            candidate_id=application.candidate_id,
+            job_id=application.job_id,
+            job_title=application.job.title,
+            job_location=application.job.location,
+            job_type=application.job.job_type,
+            about_yourself=application.about_yourself,
+            has_resume=bool(application.resume),
+            status=application.status,
+            applied_at=application.applied_at,
+        )
+        for application in applications
+    ]
 
+
+
+# --------------------------------------------------
+# GET RECRUITER APPLICATIONS
+# --------------------------------------------------
 
 @router.get(
     "/recruiter-applications",
@@ -173,16 +237,7 @@ def get_recruiter_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get applications submitted to jobs owned by the authenticated recruiter.
-
-    Args:
-        status_filter: Optional application status filter.
-        db: Database session used to retrieve applications.
-        current_user: Authenticated recruiter requesting applications.
-
-    Returns:
-        list[Application]: Applications submitted to the recruiter's jobs.
-    """
+    """Get applications submitted to jobs owned by the recruiter."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -220,6 +275,10 @@ def get_recruiter_applications(
     return applications
 
 
+# --------------------------------------------------
+# ARCHIVE APPLICATION
+# --------------------------------------------------
+
 @router.put(
     "/{application_id}/archive",
     response_model=ApplicationResponse,
@@ -229,16 +288,7 @@ def archive_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Archive an application belonging to the authenticated candidate.
-
-    Args:
-        application_id: ID of the application to archive.
-        db: Database session.
-        current_user: Authenticated user making the request.
-
-    Returns:
-        ApplicationResponse: The archived application.
-    """
+    """Archive an application belonging to the authenticated candidate."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -284,6 +334,10 @@ def archive_application(
     return application
 
 
+# --------------------------------------------------
+# GET ARCHIVED APPLICATIONS
+# --------------------------------------------------
+
 @router.get(
     "/archived",
     response_model=list[ApplicationDetailResponse],
@@ -292,15 +346,7 @@ def get_archived_applications(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return applications archived by the authenticated candidate.
-
-    Args:
-        db: Database session.
-        current_user: Authenticated user making the request.
-
-    Returns:
-        list[ApplicationDetailResponse]: Archived applications.
-    """
+    """Return applications archived by the authenticated candidate."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -347,25 +393,18 @@ def get_archived_applications(
     ]
 
 
-@router.get(
-    "/{application_id}",
-    response_model=ApplicationDetailResponse,
-)
-def get_application_details(
+# --------------------------------------------------
+# DOWNLOAD APPLICATION RESUME
+# --------------------------------------------------
+
+
+@router.get("/{application_id}/resume")
+def download_application_resume(
     application_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get detailed information about an accessible application.
-
-    Args:
-        application_id: ID of the application to retrieve.
-        db: Database session used to retrieve application data.
-        current_user: Authenticated user requesting the application.
-
-    Returns:
-        ApplicationDetailResponse: Detailed application information.
-    """
+    """Allow the candidate or authorized recruiter to access the resume."""
 
     application = (
         db.query(Application)
@@ -380,6 +419,7 @@ def get_application_details(
             detail="Application not found.",
         )
 
+    # Verify candidate ownership.
     if current_user.role == "candidate":
         candidate_profile = (
             db.query(CandidateProfile)
@@ -387,18 +427,16 @@ def get_application_details(
             .first()
         )
 
-        if candidate_profile is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Candidate profile not found.",
-            )
-
-        if application.candidate_id != candidate_profile.id:
+        if (
+            candidate_profile is None
+            or application.candidate_id != candidate_profile.id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not allowed to view this application.",
+                detail="You cannot access this application resume.",
             )
 
+    # Verify recruiter ownership of the job.
     elif current_user.role == "recruiter":
         recruiter_profile = (
             db.query(RecruiterProfile)
@@ -406,36 +444,57 @@ def get_application_details(
             .first()
         )
 
-        if recruiter_profile is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Recruiter profile not found.",
-            )
-
-        if application.job.recruiter_id != recruiter_profile.id:
+        if (
+            recruiter_profile is None
+            or application.job.recruiter_id != recruiter_profile.id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not allowed to view this application.",
+                detail="You cannot access this application resume.",
             )
 
     else:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not allowed to view applications.",
+            detail="You are not authorized to access application resumes.",
         )
 
-    return ApplicationDetailResponse(
-        id=application.id,
-        candidate_id=application.candidate_id,
-        job_id=application.job_id,
-        job_title=application.job.title,
-        job_location=application.job.location,
-        job_type=application.job.job_type,
-        about_yourself=application.about_yourself,
-        status=application.status,
-        applied_at=application.applied_at,
+    if not application.resume:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No resume was submitted with this application.",
+        )
+
+    # Retrieve the stored resume.
+    file_path = get_stored_file(application.resume)
+
+    # Identify the file format.
+    mime_types = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+
+    media_type = mime_types.get(file_path.suffix.lower())
+
+    if media_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported resume format.",
+        )
+
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type=media_type,
+        headers={
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
     )
 
+
+# --------------------------------------------------
+# UPDATE APPLICATION STATUS
+# --------------------------------------------------
 
 @router.put(
     "/{application_id}/status",
@@ -447,17 +506,7 @@ def update_application_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update the status of an application owned by the authenticated recruiter.
-
-    Args:
-        application_id: ID of the application to update.
-        status_data: New status assigned to the application.
-        db: Database session used to update the application.
-        current_user: Authenticated recruiter performing the update.
-
-    Returns:
-        Application: The updated application.
-    """
+    """Update the status of an application owned by the recruiter."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -502,3 +551,5 @@ def update_application_status(
     db.refresh(application)
 
     return application
+
+

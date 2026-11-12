@@ -6,18 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
-
 class Company(Base):
-    """Represent a company registered on HireSwipe.
-
-    Attributes:
-        id: Unique identifier for the company.
-        admin_user_id: ID of the user who administers the company.
-        name: Name of the company.
-        description: Description of the company.
-        location: Company's location.
-        website: Company's website URL.
-    """
+    """Represent a company registered on HireSwipe."""
 
     __tablename__ = "companies"
 
@@ -54,7 +44,16 @@ class Company(Base):
         nullable=True
     )
 
-    admin = relationship("User", foreign_keys=[admin_user_id])
+    # Company admin profile picture
+    admin_profile_photo: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    admin = relationship(
+        "User",
+        foreign_keys=[admin_user_id]
+    )
 
     recruiters = relationship(
         "RecruiterProfile",

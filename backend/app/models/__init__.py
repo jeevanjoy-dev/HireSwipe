@@ -6,3 +6,6 @@ from app.models.job import Job
 from app.models.application import Application
 from app.models.savedjob import SavedJob
 from app.models.company_join_request import CompanyJoinRequest
+from app.models.pending_registration import PendingRegistration
+from app.models.login_challenge import LoginChallenge
+from app.models.phone_verification_challenge import PhoneVerificationChallenge

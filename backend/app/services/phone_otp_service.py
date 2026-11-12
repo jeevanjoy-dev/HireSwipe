@@ -1,9 +1,13 @@
 
+import logging
 import os
+import secrets
+
+logger = logging.getLogger(__name__)
 
 
 def get_phone_otp() -> str:
-    """Return the configured mock OTP in development mode."""
+    """Generate a six-digit OTP for simulated SMS in development."""
 
     mode = os.getenv("PHONE_OTP_MODE", "mock").lower()
 
@@ -12,11 +16,21 @@ def get_phone_otp() -> str:
             "A real SMS provider has not been configured."
         )
 
-    otp = os.getenv("MOCK_PHONE_OTP")
+    return f"{secrets.randbelow(1000000):06d}"
 
-    if not otp or len(otp) != 6 or not otp.isdigit():
+
+def send_phone_otp(phone: str, otp: str) -> None:
+    """Simulate sending an SMS by logging the OTP."""
+
+    mode = os.getenv("PHONE_OTP_MODE", "mock").lower()
+
+    if mode != "mock":
         raise RuntimeError(
-            "Mock phone OTP configuration is invalid."
+            "A real SMS provider has not been configured."
         )
 
-    return otp
+    logger.warning(
+        "[SIMULATED SMS] Phone: %s | OTP: %s",
+        phone,
+        otp,
+    )

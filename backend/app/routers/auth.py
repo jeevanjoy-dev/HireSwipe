@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.pending_registration import PendingRegistration
 from app.models.login_challenge import LoginChallenge
+from app.models.phone_verification_challenge import PhoneVerificationChallenge
 
 from app.schemas.auth import (
     RegistrationStartRequest,
@@ -23,7 +24,16 @@ from app.schemas.auth import (
     GoogleAuthRequest,
     AuthResponse,
     UserResponse,
+    PhoneOTPRequest,
+    PhoneOTPVerifyRequest,
+    PhoneOTPResponse,
 )
+
+from app.services.phone_otp_service import (
+    get_phone_otp,
+    send_phone_otp,
+)
+
 
 from app.dependencies.security import create_access_token
 from app.dependencies.auth import get_current_user
@@ -390,6 +400,8 @@ def start_email_login(
     except Exception as exc:
         db.rollback()
 
+        print("LOGIN OTP ERROR:", repr(exc))
+
         raise HTTPException(
             status_code=503,
             detail="Could not process login OTP request.",
@@ -600,3 +612,181 @@ def get_me(
     """Return the currently authenticated user's details."""
 
     return current_user
+
+
+# ==================================================
+# PHONE VERIFICATION - STEP 1
+# SEND PHONE OTP
+# ==================================================
+
+@router.post(
+    "/phone/send-otp",
+    response_model=PhoneOTPResponse,
+)
+def send_phone_verification_otp(
+    phone_data: PhoneOTPRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Send a simulated OTP to verify the user's phone number."""
+
+    phone = phone_data.phone
+
+    if current_user.phone == phone and current_user.phone_verified:
+        raise HTTPException(
+            status_code=409,
+            detail="This phone number is already verified.",
+        )
+
+    existing_phone = (
+        db.query(User)
+        .filter(
+            User.phone == phone,
+            User.id != current_user.id,
+        )
+        .first()
+    )
+
+    if existing_phone:
+        raise HTTPException(
+            status_code=409,
+            detail="This phone number is already associated with another account.",
+        )
+
+    challenge = (
+        db.query(PhoneVerificationChallenge)
+        .filter(
+            PhoneVerificationChallenge.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if challenge and not can_resend_otp(challenge.last_sent_at):
+        raise HTTPException(
+            status_code=429,
+            detail="Please wait before requesting another OTP.",
+        )
+
+    otp = get_phone_otp()
+
+    if challenge:
+        challenge.phone = phone
+        challenge.otp_hash = hash_otp(otp)
+        challenge.otp_expires_at = get_otp_expiry()
+        challenge.otp_attempts = 0
+        challenge.last_sent_at = datetime.utcnow()
+    else:
+        challenge = PhoneVerificationChallenge(
+            user_id=current_user.id,
+            phone=phone,
+            otp_hash=hash_otp(otp),
+            otp_expires_at=get_otp_expiry(),
+            otp_attempts=0,
+            last_sent_at=datetime.utcnow(),
+        )
+        db.add(challenge)
+
+    try:
+        send_phone_otp(phone, otp)
+        db.commit()
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not send phone verification OTP.",
+        ) from exc
+
+    return {
+        "message": "Phone verification OTP sent successfully."
+    }
+
+
+# ==================================================
+# PHONE VERIFICATION - STEP 2
+# VERIFY PHONE OTP
+# ==================================================
+
+@router.post(
+    "/phone/verify",
+    response_model=PhoneOTPResponse,
+)
+def verify_phone_number(
+    verification_data: PhoneOTPVerifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Verify the OTP and save the user's phone number."""
+
+    challenge = (
+        db.query(PhoneVerificationChallenge)
+        .filter(
+            PhoneVerificationChallenge.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if not challenge:
+        raise HTTPException(
+            status_code=404,
+            detail="Phone verification session not found. Request an OTP first.",
+        )
+
+    if challenge.otp_attempts >= MAX_OTP_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many incorrect OTP attempts. Request a new OTP later.",
+        )
+
+    if datetime.utcnow() > challenge.otp_expires_at:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone verification OTP has expired. Request a new OTP.",
+        )
+
+    if not verify_otp(
+        verification_data.otp,
+        challenge.otp_hash,
+    ):
+        challenge.otp_attempts += 1
+        db.commit()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Incorrect phone verification OTP.",
+        )
+
+    existing_phone = (
+        db.query(User)
+        .filter(
+            User.phone == challenge.phone,
+            User.id != current_user.id,
+        )
+        .first()
+    )
+
+    if existing_phone:
+        raise HTTPException(
+            status_code=409,
+            detail="This phone number is already associated with another account.",
+        )
+
+    try:
+        current_user.phone = challenge.phone
+        current_user.phone_verified = True
+
+        db.delete(challenge)
+        db.commit()
+        db.refresh(current_user)
+
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Could not complete phone verification.",
+        ) from exc
+
+    return {
+        "message": "Phone number verified successfully."
+    }
+

@@ -136,3 +136,27 @@ class EmailUpdateRequest(BaseModel):
 
 class RegistrationTokenRequest(BaseModel):
     registration_token: str
+
+
+# --------------------------------------------------
+# PHONE NUMBER VERIFICATION
+# --------------------------------------------------
+
+class PhoneOTPRequest(BaseModel):
+    """Request an OTP for phone number verification."""
+
+    phone: str = Field(
+        min_length=10,
+        max_length=16,
+        pattern=r"^\+?[0-9]{10,15}$"
+    )
+
+class PhoneOTPVerifyRequest(BaseModel):
+    """Verify the OTP sent to the requested phone number."""
+
+    otp: str = Field(pattern=r"^\d{6}$")
+
+class PhoneOTPResponse(BaseModel):
+    """Response after requesting or verifying phone OTP."""
+
+    message: str

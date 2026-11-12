@@ -34,6 +34,7 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     job_id: int
     about_yourself: str | None = None
+    has_resume: bool = False
     status: str
     applied_at: datetime
 
@@ -60,6 +61,7 @@ class ApplicationDetailResponse(BaseModel):
     job_location: str | None = None
     job_type: str
     about_yourself: str | None = None
+    has_resume: bool = False
     status: str
     applied_at: datetime
 

@@ -14,6 +14,17 @@ from app.schemas.recruiter import (
     RecruiterProfileResponse,
 )
 
+from fastapi import UploadFile, File
+from fastapi.responses import FileResponse
+
+from app.services.file_storage import (
+    save_upload,
+    get_stored_file,
+    delete_stored_file,
+    ALLOWED_PHOTO_EXTENSIONS,
+    MAX_PHOTO_SIZE,
+)
+
 
 router = APIRouter(
     prefix="/recruiter",
@@ -164,9 +175,6 @@ def get_recruiter_profile(
     return profile
 
 
-# --------------------------------------------------
-# UPDATE RECRUITER PROFILE
-# --------------------------------------------------
 
 # --------------------------------------------------
 # UPDATE RECRUITER PROFILE
@@ -211,3 +219,135 @@ def update_recruiter_profile(
     db.refresh(current_user)
 
     return profile
+
+
+# --------------------------------------------------
+# UPLOAD / REPLACE RECRUITER PROFILE PHOTO
+# --------------------------------------------------
+
+@router.post("/profile/photo")
+async def upload_recruiter_photo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can upload profile photos.",
+        )
+
+    profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    old_photo = profile.profile_photo
+    new_photo = None
+
+    try:
+        new_photo = await save_upload(
+            upload=file,
+            category="recruiter_profile_photos",
+            allowed_extensions=ALLOWED_PHOTO_EXTENSIONS,
+            max_size=MAX_PHOTO_SIZE,
+        )
+
+        profile.profile_photo = new_photo
+
+        db.commit()
+        db.refresh(profile)
+
+    except Exception:
+        db.rollback()
+
+        if new_photo:
+            delete_stored_file(new_photo)
+
+        raise
+
+    finally:
+        await file.close()
+
+    if old_photo:
+        delete_stored_file(old_photo)
+
+    return {"message": "Recruiter photo updated successfully."}
+
+
+# --------------------------------------------------
+# GET RECRUITER PROFILE PHOTO
+# --------------------------------------------------
+
+@router.get("/profile/photo")
+def get_recruiter_photo(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied.",
+        )
+
+    profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if not profile or not profile.profile_photo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter photo not found.",
+        )
+
+    return FileResponse(
+        get_stored_file(profile.profile_photo)
+    )
+
+
+# --------------------------------------------------
+# DELETE RECRUITER PROFILE PHOTO
+# --------------------------------------------------
+
+@router.delete("/profile/photo")
+def delete_recruiter_photo(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied.",
+        )
+
+    profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if not profile or not profile.profile_photo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No recruiter photo found.",
+        )
+
+    old_photo = profile.profile_photo
+
+    profile.profile_photo = None
+
+    db.commit()
+    db.refresh(profile)
+
+    delete_stored_file(old_photo)
+
+    return {"message": "Recruiter photo removed successfully."}

@@ -14,6 +14,7 @@ class RecruiterProfileUpdate(BaseModel):
     name: str
     designation: str
 
+
 class RecruiterUserResponse(BaseModel):
     """Represent the recruiter's personal account information."""
 
@@ -24,16 +25,16 @@ class RecruiterUserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-
 class CompanyProfileResponse(BaseModel):
     """Represent company information within a recruiter profile."""
 
     id: int
-    admin_user_id:int
+    admin_user_id: int
     name: str
     description: str | None = None
     location: str | None = None
     website: str | None = None
+    admin_profile_photo: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,10 +46,12 @@ class RecruiterProfileResponse(BaseModel):
     user_id: int
     company_id: int | None = None
     designation: str | None = None
+    profile_photo: str | None = None
     user: RecruiterUserResponse
     company: CompanyProfileResponse | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class CompanyRecruiterResponse(BaseModel):
     """Represent a recruiter managed by a company admin."""
@@ -58,6 +61,7 @@ class CompanyRecruiterResponse(BaseModel):
     name: str
     email: str
     designation: str | None = None
+    profile_photo: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

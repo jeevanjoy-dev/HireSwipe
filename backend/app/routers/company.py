@@ -1,7 +1,15 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    UploadFile,
+    File,
+)
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,6 +19,14 @@ from app.models.company import Company
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.company_join_request import CompanyJoinRequest
 from app.models.user import User
+
+from app.services.file_storage import (
+    save_upload,
+    get_stored_file,
+    delete_stored_file,
+    ALLOWED_PHOTO_EXTENSIONS,
+    MAX_PHOTO_SIZE,
+)
 
 from app.schemas.company import (
     CompanyCreate,
@@ -23,7 +39,6 @@ from app.schemas.company_join_request import (
     CompanyJoinRequestReview,
     CompanyJoinRequestResponse,
     CompanyJoinRequestAdminResponse,
-
 )
 
 from app.schemas.recruiter import (
@@ -140,7 +155,6 @@ def create_company(
     try:
         db.flush()
 
-        # Reuse a legacy unassociated profile if one already exists.
         if existing_profile:
             existing_profile.company_id = company.id
 
@@ -216,6 +230,150 @@ def get_my_admin_company(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="You do not administer a company.",
         )
+
+    return company
+
+
+# --------------------------------------------------
+# UPLOAD / REPLACE COMPANY ADMIN PROFILE PHOTO
+# --------------------------------------------------
+
+@router.post(
+    "/my-admin-company/photo",
+    response_model=CompanyResponse,
+)
+async def upload_company_admin_photo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only company admins can upload profile photos.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not administer a company.",
+        )
+
+    new_photo_key = None
+    old_photo_key = company.admin_profile_photo
+
+    try:
+        new_photo_key = await save_upload(
+            upload=file,
+            category="company_admin_profile_photos",
+            allowed_extensions=ALLOWED_PHOTO_EXTENSIONS,
+            max_size=MAX_PHOTO_SIZE,
+        )
+
+        company.admin_profile_photo = new_photo_key
+
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+
+        if new_photo_key:
+            delete_stored_file(new_photo_key)
+
+        raise
+
+    finally:
+        await file.close()
+
+    if old_photo_key:
+        delete_stored_file(old_photo_key)
+
+    return company
+
+
+# --------------------------------------------------
+# GET COMPANY ADMIN PROFILE PHOTO
+# --------------------------------------------------
+
+@router.get("/my-admin-company/photo")
+def get_company_admin_photo(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only company admins can access this photo.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .first()
+    )
+
+    if not company or not company.admin_profile_photo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Company admin profile photo not found.",
+        )
+
+    file_path = get_stored_file(company.admin_profile_photo)
+
+    return FileResponse(file_path)
+
+
+# --------------------------------------------------
+# DELETE COMPANY ADMIN PROFILE PHOTO
+# --------------------------------------------------
+
+@router.delete(
+    "/my-admin-company/photo",
+    response_model=CompanyResponse,
+)
+def delete_company_admin_photo(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only company admins can delete profile photos.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not administer a company.",
+        )
+
+    old_photo_key = company.admin_profile_photo
+
+    if not old_photo_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No company admin profile photo to delete.",
+        )
+
+    company.admin_profile_photo = None
+
+    db.commit()
+    db.refresh(company)
+
+    delete_stored_file(old_photo_key)
 
     return company
 
@@ -327,7 +485,6 @@ def create_join_request(
             detail="You are already the admin of this company.",
         )
 
-    # A recruiter who already belongs to a company cannot request another.
     existing_profile = (
         db.query(RecruiterProfile)
         .filter(
@@ -355,7 +512,6 @@ def create_join_request(
             detail="You already administer a company.",
         )
 
-    # Do not allow another pending request for a different company either.
     existing_request = (
         db.query(CompanyJoinRequest)
         .filter(
@@ -371,7 +527,6 @@ def create_join_request(
             detail="You already have a pending company join request.",
         )
 
-    # Do not allow reuse of an old approved request to join another company.
     approved_request = (
         db.query(CompanyJoinRequest)
         .filter(
@@ -435,7 +590,6 @@ def get_my_join_requests(
 # --------------------------------------------------
 # VIEW COMPANY JOIN REQUESTS (COMPANY ADMIN)
 # --------------------------------------------------
-
 
 @router.get(
     "/join-requests/company/{company_id}",
@@ -556,7 +710,6 @@ def review_join_request(
         )
 
     if review_data.status == "approved":
-        # Ensure the recruiter has not joined another company in the meantime.
         existing_admin_company = (
             db.query(Company)
             .filter(Company.admin_user_id == join_request.recruiter_id)
@@ -583,8 +736,6 @@ def review_join_request(
                 detail="The recruiter is already associated with a company.",
             )
 
-        # Reattach a legacy profile if one exists without a company.
-        # New recruiters create their profile after approval.
         if existing_profile:
             existing_profile.company_id = company.id
 
@@ -648,6 +799,7 @@ def get_company_recruiters(
             "name": user.name,
             "email": user.email,
             "designation": profile.designation,
+            "profile_photo": profile.profile_photo,
         }
         for profile, user in recruiters
     ]
@@ -750,6 +902,7 @@ def update_company_recruiter(
         "name": user.name,
         "email": user.email,
         "designation": profile.designation,
+        "profile_photo": profile.profile_photo,
     }
 
 
