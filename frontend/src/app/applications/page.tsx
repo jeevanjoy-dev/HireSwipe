@@ -1,17 +1,11 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiRequest } from "../../services/api";
 
-type Application = {
-  id: number;
-  candidate_id: number;
-  job_id: number;
-  status: string;
-  applied_at: string;
-};
-
+// Represents a detailed application returned by the backend.
 type ApplicationDetail = {
   id: number;
   candidate_id: number;
@@ -19,10 +13,13 @@ type ApplicationDetail = {
   job_title: string;
   job_location: string | null;
   job_type: string;
+  about_yourself: string | null;
+  has_resume: boolean;
   status: string;
   applied_at: string;
 };
 
+// Represents an archived application.
 type ArchivedApplication = {
   id: number;
   candidate_id: number;
@@ -34,6 +31,7 @@ type ArchivedApplication = {
   applied_at: string;
 };
 
+// Represents a saved job.
 type SavedJob = {
   id: number;
   title: string;
@@ -70,38 +68,31 @@ export default function MyJobsPage() {
 
   const [archivingId, setArchivingId] = useState<number | null>(null);
 
+  // Loads applications, saved jobs, and archived applications.
   useEffect(() => {
-    /**
-     * Load the candidate's applications and saved jobs.
-     *
-     * Returns:
-     *     None. Updates application and saved-job state.
-     */
     async function loadData() {
       try {
         setLoading(true);
         setError("");
 
-        const applicationData: Application[] = await apiRequest(
+        const token = localStorage.getItem("access_token"); // Checks candidate authentication
+
+        if (!token) {
+          router.push("/login");
+          return;
+        }
+
+        // Fetches applications with job details in a single request.
+        const detailedApplications: ApplicationDetail[] = await apiRequest(
           "/applications/my-applications",
           {
             method: "GET",
           }
         );
 
-        const detailedApplications: ApplicationDetail[] = await Promise.all(
-          applicationData.map(async (application) => {
-            return await apiRequest(
-              `/applications/${application.id}`,
-              {
-                method: "GET",
-              }
-            );
-          })
-        );
+        setApplications(detailedApplications); // Stores complete application details
 
-        setApplications(detailedApplications);
-
+        // Loads saved jobs independently so their failure doesn't block applications.
         try {
           const savedData: SavedJob[] = await apiRequest("/saved-jobs/", {
             method: "GET",
@@ -113,6 +104,7 @@ export default function MyJobsPage() {
           setSavedJobs([]);
         }
 
+        // Loads archived applications independently.
         try {
           const archivedData: ArchivedApplication[] = await apiRequest(
             "/applications/archived",
@@ -140,16 +132,10 @@ export default function MyJobsPage() {
     }
 
     loadData();
-  }, []);
+  }, [router]);
 
   /**
-   * Archive a candidate application.
-   *
-   * Args:
-   *     applicationId: ID of the application to archive.
-   *
-   * Returns:
-   *     None. Updates the application lists after successful archiving.
+   * Archives an application belonging to the candidate.
    */
   async function handleArchive(applicationId: number) {
     try {
@@ -191,25 +177,19 @@ export default function MyJobsPage() {
     }
   }
 
-  /**
-   * Open a job detail page.
-   *
-   * Args:
-   *     jobId: ID of the selected job.
-   *
-   * Returns:
-   *     None. Navigates to the job detail page.
-   */
+  // Navigates to the selected job's detail page.
   function viewJob(jobId: number) {
     router.push(`/jobs/${jobId}`);
   }
 
+  // Includes shortlisted and interview-stage applications.
   const interviewApplications = applications.filter(
     (application) =>
       application.status === "Shortlisted" ||
       application.status === "Interview"
   );
 
+  // Defines colors for each application status.
   const statusClasses: Record<string, string> = {
     Applied:
       "bg-blue-500/20 text-blue-300 border border-blue-400/30",
@@ -230,6 +210,7 @@ export default function MyJobsPage() {
     );
   }
 
+  // Formats dates for display.
   function formatDate(dateString: string) {
     return new Date(dateString).toLocaleDateString("en-IN", {
       day: "numeric",
@@ -238,6 +219,7 @@ export default function MyJobsPage() {
     });
   }
 
+  // Renders an active application card.
   function renderApplicationCard(application: ApplicationDetail) {
     return (
       <div
@@ -294,6 +276,7 @@ export default function MyJobsPage() {
     );
   }
 
+  // Renders an archived application card.
   function renderArchivedCard(application: ArchivedApplication) {
     return (
       <div
@@ -336,6 +319,7 @@ export default function MyJobsPage() {
     );
   }
 
+  // Renders a saved job card.
   function renderSavedJobCard(job: SavedJob) {
     return (
       <div
@@ -378,6 +362,7 @@ export default function MyJobsPage() {
     );
   }
 
+  // Displays an empty state when a tab has no records.
   function renderEmptyState(title: string, description: string) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/5 p-10 text-center backdrop-blur-sm">
@@ -385,13 +370,18 @@ export default function MyJobsPage() {
           📂
         </div>
 
-        <h3 className="text-lg font-semibold text-white">{title}</h3>
+        <h3 className="text-lg font-semibold text-white">
+          {title}
+        </h3>
 
-        <p className="mt-2 text-sm text-gray-400">{description}</p>
+        <p className="mt-2 text-sm text-gray-400">
+          {description}
+        </p>
       </div>
     );
   }
 
+  // Displays content according to the selected tab.
   function renderActiveContent() {
     if (activeTab === "Saved") {
       if (savedJobs.length === 0) {
@@ -458,6 +448,7 @@ export default function MyJobsPage() {
     );
   }
 
+  // Displays the loading screen.
   if (loading) {
     return (
       <main className="min-h-screen bg-[#090d1a] px-6 py-10 text-white">
