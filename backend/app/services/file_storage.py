@@ -33,6 +33,7 @@ ALLOWED_CATEGORIES = {
     "candidate_profile_photos",
     "recruiter_profile_photos",
     "company_admin_profile_photos",
+    "company_verification_documents",
 }
 
 

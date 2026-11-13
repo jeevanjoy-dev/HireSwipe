@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CompanyCreate(BaseModel):
@@ -14,12 +14,28 @@ class CompanyCreate(BaseModel):
 class CompanyResponse(BaseModel):
     """Represent company information returned by the API."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     description: str | None = None
     location: str | None = None
     website: str | None = None
     admin_profile_photo: str | None = None
+
+    # Business contact information
+    business_email: str | None = None
+    business_phone: str | None = None
+    business_address: str | None = None
+
+    # Email verification status
+    business_email_verified: bool = False
+
+    # Document verification status
+    documents_status: str = "not_submitted"
+
+    # Overall verification status
+    verification_status: str = "unverified"
 
 
 class CompanyUpdate(BaseModel):
@@ -29,3 +45,15 @@ class CompanyUpdate(BaseModel):
     description: str | None = None
     location: str | None = None
     website: str | None = None
+
+
+class CompanyBusinessEmailRequest(BaseModel):
+    """Request to verify the company's official business email."""
+
+    business_email: str
+
+
+class CompanyBusinessEmailOTPVerifyRequest(BaseModel):
+    """Request to verify the OTP sent to the business email."""
+
+    otp: str
