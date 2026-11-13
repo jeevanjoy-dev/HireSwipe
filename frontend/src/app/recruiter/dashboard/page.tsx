@@ -654,6 +654,15 @@ export default function RecruiterDashboardPage() {
                             You are the administrator of {company.name}.
                         </p>
 
+                        <button
+                            onClick={() =>
+                                router.push("/recruiter/company_verification")
+                            }
+                            className="mt-5 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold hover:bg-blue-500"
+                        >
+                            Company Verification
+                        </button>
+
                         {!profile && (
                             <button
                                 onClick={() =>
