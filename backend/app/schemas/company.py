@@ -1,5 +1,5 @@
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CompanyCreate(BaseModel):
@@ -45,6 +45,14 @@ class CompanyUpdate(BaseModel):
     description: str | None = None
     location: str | None = None
     website: str | None = None
+
+    # International phone number: + followed by 8–15 digits
+    business_phone: str | None = Field(
+        default=None,
+        pattern=r"^\+[1-9]\d{7,14}$"
+    )
+
+    business_address: str | None = None
 
 
 class CompanyBusinessEmailRequest(BaseModel):

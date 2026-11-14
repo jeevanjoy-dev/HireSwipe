@@ -168,7 +168,7 @@ def validate_company_email_domain(
     """Require the business email domain to match the company website."""
 
     if not re.fullmatch(
-        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+",
         business_email,
     ):
         raise HTTPException(
@@ -213,15 +213,20 @@ MAX_COMPANY_DOCUMENT_SIZE = 5 * 1024 * 1024  # 5 MB per document
 
 
 def update_company_document_status(company: Company) -> None:
-    """Update document and overall status after document changes."""
-
     has_first = bool(company.document_1)
     has_second = bool(company.document_2)
+
+    has_business_details = (
+        bool(company.business_phone)
+        and bool(company.business_phone.strip())
+        and bool(company.business_address)
+        and bool(company.business_address.strip())
+    )
 
     if has_first and has_second:
         company.documents_status = "submitted"
 
-        if company.business_email_verified:
+        if company.business_email_verified and has_business_details:
             company.verification_status = "pending_review"
         else:
             company.verification_status = "unverified"
@@ -233,7 +238,6 @@ def update_company_document_status(company: Company) -> None:
     else:
         company.documents_status = "not_submitted"
         company.verification_status = "unverified"
-
 
 # --------------------------------------------------
 # CREATE COMPANY
@@ -984,6 +988,8 @@ def update_company(
     company.description = company_data.description
     company.location = company_data.location
     company.website = company_data.website
+    company.business_phone = company_data.business_phone
+    company.business_address = company_data.business_address
 
     # Reset verification if the company's website domain changes.
     if old_website_domain != new_website_domain:

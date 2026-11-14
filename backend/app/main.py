@@ -8,6 +8,8 @@ from app.routers import job
 from app.routers import application
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import savedjob
+from app.routers import admin
+
 
 
 app = FastAPI(
@@ -40,6 +42,10 @@ app.include_router(job.router)
 app.include_router(application.router)
 
 app.include_router(savedjob.router)
+
+app.include_router(admin.router)
+
+
 
 
 
