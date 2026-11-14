@@ -126,42 +126,58 @@ export default function CompanyVerificationPage() {
     // SEND COMPANY EMAIL OTP
     // --------------------------------------------------
 
-    async function handleSendOtp() {
-        try {
-            setSendingOtp(true);
-            setError("");
-            setMessage("");
+   async function handleSendOtp() {
+    const email = businessEmail.trim().toLowerCase();
 
-            const result: ApiMessage = await apiRequest(
-                "/companies/my-admin-company/business-email/send-otp",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        business_email: businessEmail,
-                    }),
-                }
-            );
-
-            setBusinessEmail(
-                result.business_email || businessEmail
-            );
-
-            setOtpSent(true);
-            setOtp("");
-
-            setMessage(
-                result.message || "Verification OTP sent successfully."
-            );
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Unable to send verification OTP."
-            );
-        } finally {
-            setSendingOtp(false);
-        }
+    if (!email) {
+        setError("Please enter your official business email.");
+        return;
     }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        setError("Please enter a valid business email address.");
+        return;
+    }
+
+    try {
+        setSendingOtp(true);
+        setError("");
+        setMessage("");
+
+        console.log("Sending business email OTP:", email);
+
+        const result: ApiMessage = await apiRequest(
+            "/companies/my-admin-company/business-email/send-otp",
+            {
+                method: "POST",
+                body: JSON.stringify({
+                    business_email: email,
+                }),
+            }
+        );
+
+        console.log("OTP API response:", result);
+
+        setBusinessEmail(result.business_email || email);
+        setOtpSent(true);
+        setOtp("");
+
+        setMessage(
+            result.message || "Verification OTP sent successfully."
+        );
+
+    } catch (err) {
+        console.error("Business email OTP error:", err);
+
+        setError(
+            err instanceof Error
+                ? err.message
+                : "Unable to send verification OTP."
+        );
+    } finally {
+        setSendingOtp(false);
+    }
+}
 
     // --------------------------------------------------
     // VERIFY COMPANY EMAIL OTP
@@ -575,6 +591,7 @@ export default function CompanyVerificationPage() {
 
                     {!company.business_email_verified && (
                         <button
+                            type="button"
                             onClick={handleSendOtp}
                             disabled={sendingOtp || !businessEmail.trim()}
                             className="mt-4 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
