@@ -7,6 +7,12 @@ import { apiFileRequest, apiRequest } from "../../../services/api";
 
 interface Company {
     id: number;
+    request_id: number;
+    request_type: string;
+    version_number: number;
+    status: string;
+    submitted_at: string | null;
+
     name: string;
     website: string | null;
     business_email: string | null;
@@ -14,6 +20,7 @@ interface Company {
     domain_match: boolean;
     business_phone: string | null;
     business_address: string | null;
+
     document_1_uploaded: boolean;
     document_2_uploaded: boolean;
     documents_status: string;
@@ -27,6 +34,10 @@ interface CompanyDetails extends Company {
     email_domain: string | null;
 }
 
+interface ApiMessage {
+    message?: string;
+}
+
 export default function CompanyVerificationPage() {
     const router = useRouter();
 
@@ -37,11 +48,50 @@ export default function CompanyVerificationPage() {
     const [loading, setLoading] = useState(true);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [actionLoading, setActionLoading] = useState(false);
+
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
 
+    // Rejection modal state
+    const [showRejectModal, setShowRejectModal] = useState(false);
+    const [rejectionReason, setRejectionReason] = useState("");
+    const [rejectingCompany, setRejectingCompany] =
+        useState<CompanyDetails | null>(null);
+
     // --------------------------------------------------
-    // LOAD PENDING COMPANIES
+    // APPROVAL REQUIREMENTS
+    // --------------------------------------------------
+
+    const canApprove =
+        selectedCompany !== null &&
+        selectedCompany.business_email_verified === true &&
+        selectedCompany.domain_match === true &&
+        selectedCompany.document_1_uploaded === true &&
+        selectedCompany.document_2_uploaded === true;
+
+    const approvalRequirements = selectedCompany
+        ? [
+              {
+                  label: "Business email OTP verification",
+                  completed: selectedCompany.business_email_verified,
+              },
+              {
+                  label: "Website and business email domain match",
+                  completed: selectedCompany.domain_match,
+              },
+              {
+                  label: "Company registration document",
+                  completed: selectedCompany.document_1_uploaded,
+              },
+              {
+                  label: "Business address proof",
+                  completed: selectedCompany.document_2_uploaded,
+              },
+          ]
+        : [];
+
+    // --------------------------------------------------
+    // LOAD PENDING VERIFICATION REQUESTS
     // --------------------------------------------------
 
     const loadCompanies = useCallback(async () => {
@@ -70,7 +120,7 @@ export default function CompanyVerificationPage() {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Unable to load pending companies."
+                    : "Unable to load pending verification requests."
             );
         } finally {
             setLoading(false);
@@ -111,17 +161,18 @@ export default function CompanyVerificationPage() {
     }, [router, loadCompanies]);
 
     // --------------------------------------------------
-    // LOAD SELECTED COMPANY DETAILS
+    // LOAD SELECTED VERIFICATION REQUEST DETAILS
     // --------------------------------------------------
 
-    async function handleViewCompany(companyId: number) {
+    async function handleViewCompany(company: Company) {
         try {
             setDetailsLoading(true);
             setError("");
             setSuccess("");
+            setSelectedCompany(null);
 
             const data: CompanyDetails = await apiRequest(
-                `/admin/companies/${companyId}`
+                `/admin/companies/${company.id}?request_id=${company.request_id}`
             );
 
             setSelectedCompany(data);
@@ -129,7 +180,7 @@ export default function CompanyVerificationPage() {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Unable to load company details."
+                    : "Unable to load verification request details."
             );
         } finally {
             setDetailsLoading(false);
@@ -142,13 +193,14 @@ export default function CompanyVerificationPage() {
 
     async function handleViewDocument(
         companyId: number,
+        requestId: number,
         documentNumber: number
     ) {
         try {
             setError("");
 
             const blob = await apiFileRequest(
-                `/admin/companies/${companyId}/documents/${documentNumber}`
+                `/admin/companies/${companyId}/documents/${documentNumber}?request_id=${requestId}`
             );
 
             const fileUrl = URL.createObjectURL(blob);
@@ -162,7 +214,6 @@ export default function CompanyVerificationPage() {
             link.click();
             link.remove();
 
-            // Keep the URL available while the new tab loads.
             window.setTimeout(() => URL.revokeObjectURL(fileUrl), 60000);
         } catch (err) {
             setError(
@@ -174,12 +225,25 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // APPROVE COMPANY
+    // APPROVE VERIFICATION REQUEST
     // --------------------------------------------------
 
-    async function handleApprove(companyId: number) {
+    async function handleApprove(company: CompanyDetails) {
+        const requirementsMet =
+            company.business_email_verified === true &&
+            company.domain_match === true &&
+            company.document_1_uploaded === true &&
+            company.document_2_uploaded === true;
+
+        if (!requirementsMet) {
+            setError(
+                "Cannot approve this request. Business email verification, domain matching, and both documents are required."
+            );
+            return;
+        }
+
         const confirmed = window.confirm(
-            "Are you sure you want to approve this company?"
+            `Approve verification request #${company.request_id} for ${company.name}?`
         );
 
         if (!confirmed) return;
@@ -189,15 +253,16 @@ export default function CompanyVerificationPage() {
             setError("");
             setSuccess("");
 
-            const response = await apiRequest(
-                `/admin/companies/${companyId}/approve`,
+            const response: ApiMessage = await apiRequest(
+                `/admin/companies/${company.id}/approve?request_id=${company.request_id}`,
                 {
                     method: "PUT",
                 }
             );
 
             setSuccess(
-                response.message || "Company verified successfully."
+                response.message ||
+                    "Verification request approved successfully."
             );
 
             setSelectedCompany(null);
@@ -206,7 +271,7 @@ export default function CompanyVerificationPage() {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Unable to approve company."
+                    : "Unable to approve verification request."
             );
         } finally {
             setActionLoading(false);
@@ -214,39 +279,74 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // REJECT COMPANY
+    // OPEN REJECTION MODAL
     // --------------------------------------------------
 
-    async function handleReject(companyId: number) {
-        const confirmed = window.confirm(
-            "Are you sure you want to reject this company's verification?"
-        );
+    function openRejectModal(company: CompanyDetails) {
+        setError("");
+        setSuccess("");
+        setRejectionReason("");
+        setRejectingCompany(company);
+        setShowRejectModal(true);
+    }
 
-        if (!confirmed) return;
+    // --------------------------------------------------
+    // CLOSE REJECTION MODAL
+    // --------------------------------------------------
+
+    function closeRejectModal() {
+        if (actionLoading) return;
+
+        setShowRejectModal(false);
+        setRejectingCompany(null);
+        setRejectionReason("");
+        setError("");
+    }
+
+    // --------------------------------------------------
+    // REJECT VERIFICATION REQUEST
+    // --------------------------------------------------
+
+    async function handleReject() {
+        if (!rejectingCompany) return;
+
+        if (!rejectionReason.trim()) {
+            setError("Please provide a rejection reason.");
+            return;
+        }
 
         try {
             setActionLoading(true);
             setError("");
             setSuccess("");
 
-            const response = await apiRequest(
-                `/admin/companies/${companyId}/reject`,
+            const response: ApiMessage = await apiRequest(
+                `/admin/companies/${rejectingCompany.id}/reject?request_id=${rejectingCompany.request_id}`,
                 {
                     method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify(rejectionReason.trim()),
                 }
             );
 
             setSuccess(
-                response.message || "Company verification rejected."
+                response.message ||
+                    "Verification request rejected successfully."
             );
 
+            setShowRejectModal(false);
+            setRejectingCompany(null);
+            setRejectionReason("");
             setSelectedCompany(null);
+
             await loadCompanies();
         } catch (err) {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Unable to reject company."
+                    : "Unable to reject verification request."
             );
         } finally {
             setActionLoading(false);
@@ -316,13 +416,14 @@ export default function CompanyVerificationPage() {
                         </h1>
 
                         <p className="mt-2 text-slate-400">
-                            Review company information and submitted documents.
+                            Review company information and submitted verification documents.
                         </p>
                     </div>
 
                     <button
                         onClick={loadCompanies}
-                        className="rounded-lg border border-slate-700 px-5 py-3 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-blue-400"
+                        disabled={actionLoading}
+                        className="rounded-lg border border-slate-700 px-5 py-3 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         ↻ Refresh
                     </button>
@@ -337,7 +438,7 @@ export default function CompanyVerificationPage() {
                 )}
 
                 {/* ERROR MESSAGE */}
-                {error && (
+                {error && !showRejectModal && (
                     <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
                         {error}
                     </div>
@@ -346,7 +447,7 @@ export default function CompanyVerificationPage() {
                 {/* PENDING COUNT */}
                 <div className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
                     <p className="text-sm text-slate-400">
-                        Companies awaiting review
+                        Verification requests awaiting review
                     </p>
 
                     <p className="mt-2 text-3xl font-bold text-yellow-400">
@@ -354,14 +455,14 @@ export default function CompanyVerificationPage() {
                     </p>
                 </div>
 
-                {/* COMPANY LIST AND DETAILS */}
+                {/* REQUEST LIST AND DETAILS */}
                 <div className="grid gap-8 lg:grid-cols-5">
 
-                    {/* PENDING COMPANY LIST */}
+                    {/* PENDING REQUEST LIST */}
                     <section className="lg:col-span-2">
 
                         <h2 className="mb-5 text-xl font-semibold">
-                            Pending Companies
+                            Pending Requests
                         </h2>
 
                         {companies.length === 0 ? (
@@ -371,19 +472,17 @@ export default function CompanyVerificationPage() {
                                     No pending verifications
                                 </p>
                                 <p className="mt-2 text-sm text-slate-400">
-                                    All submitted companies have been reviewed.
+                                    All submitted verification requests have been reviewed.
                                 </p>
                             </div>
                         ) : (
                             <div className="space-y-4">
                                 {companies.map((company) => (
                                     <button
-                                        key={company.id}
-                                        onClick={() =>
-                                            handleViewCompany(company.id)
-                                        }
+                                        key={company.request_id}
+                                        onClick={() => handleViewCompany(company)}
                                         className={`w-full rounded-2xl border p-5 text-left transition ${
-                                            selectedCompany?.id === company.id
+                                            selectedCompany?.request_id === company.request_id
                                                 ? "border-blue-500 bg-blue-500/10"
                                                 : "border-slate-800 bg-slate-900 hover:border-slate-600"
                                         }`}
@@ -404,10 +503,19 @@ export default function CompanyVerificationPage() {
                                             </span>
                                         </div>
 
-                                        <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                                            <span>Company #{company.id}</span>
-                                            <span>View details →</span>
+                                        <div className="mt-4 space-y-1 text-xs text-slate-500">
+                                            <p>Company #{company.id}</p>
+                                            <p>
+                                                Request #{company.request_id} · Version {company.version_number}
+                                            </p>
+                                            <p className="capitalize">
+                                                {company.request_type.replaceAll("_", " ")} verification
+                                            </p>
                                         </div>
+
+                                        <p className="mt-3 text-xs text-blue-400">
+                                            View request details →
+                                        </p>
                                     </button>
                                 ))}
                             </div>
@@ -415,7 +523,7 @@ export default function CompanyVerificationPage() {
 
                     </section>
 
-                    {/* COMPANY DETAILS */}
+                    {/* VERIFICATION DETAILS */}
                     <section className="lg:col-span-3">
 
                         <h2 className="mb-5 text-xl font-semibold">
@@ -425,7 +533,7 @@ export default function CompanyVerificationPage() {
                         {detailsLoading ? (
                             <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900">
                                 <p className="text-slate-400">
-                                    Loading company details...
+                                    Loading verification request...
                                 </p>
                             </div>
                         ) : !selectedCompany ? (
@@ -433,10 +541,10 @@ export default function CompanyVerificationPage() {
                                 <div>
                                     <div className="mb-3 text-4xl">🏢</div>
                                     <p className="font-semibold">
-                                        Select a company
+                                        Select a verification request
                                     </p>
                                     <p className="mt-2 text-sm text-slate-400">
-                                        Choose a company from the pending list to review its details.
+                                        Choose a request from the pending list to review its details and documents.
                                     </p>
                                 </div>
                             </div>
@@ -459,6 +567,20 @@ export default function CompanyVerificationPage() {
                                     <p className="mt-2 text-sm text-slate-400">
                                         Company ID: #{selectedCompany.id}
                                     </p>
+
+                                    <div className="mt-3 rounded-lg border border-blue-500/20 bg-blue-500/5 p-4 text-sm">
+                                        <p className="text-slate-300">
+                                            Request #{selectedCompany.request_id}
+                                        </p>
+                                        <p className="mt-1 capitalize text-blue-400">
+                                            {selectedCompany.request_type.replaceAll("_", " ")} verification · Version {selectedCompany.version_number}
+                                        </p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            Submitted: {selectedCompany.submitted_at
+                                                ? new Date(selectedCompany.submitted_at).toLocaleString()
+                                                : "Unavailable"}
+                                        </p>
+                                    </div>
 
                                     <p className="mt-4 text-sm leading-6 text-slate-300">
                                         {selectedCompany.description || "No company description provided."}
@@ -582,9 +704,11 @@ export default function CompanyVerificationPage() {
                                                     key={number}
                                                     className="rounded-xl border border-slate-800 bg-slate-950 p-5"
                                                 >
-                                                    <div className="mb-4 flex items-center justify-between">
+                                                    <div className="mb-4 flex items-center justify-between gap-3">
                                                         <span className="font-medium">
-                                                            Document {number}
+                                                            {number === 1
+                                                                ? "Company Registration Proof"
+                                                                : "Business Address Proof"}
                                                         </span>
 
                                                         <span className={`text-xs ${uploaded ? "text-green-400" : "text-red-400"}`}>
@@ -597,6 +721,7 @@ export default function CompanyVerificationPage() {
                                                         onClick={() =>
                                                             handleViewDocument(
                                                                 selectedCompany.id,
+                                                                selectedCompany.request_id,
                                                                 number
                                                             )
                                                         }
@@ -611,10 +736,61 @@ export default function CompanyVerificationPage() {
                                     </div>
                                 </div>
 
+                                {/* APPROVAL REQUIREMENTS */}
+                                <div className="mb-7 rounded-xl border border-slate-800 bg-slate-950 p-5">
+
+                                    <h4 className="mb-4 font-semibold">
+                                        Approval Requirements
+                                    </h4>
+
+                                    <div className="space-y-3">
+                                        {approvalRequirements.map((requirement) => (
+                                            <div
+                                                key={requirement.label}
+                                                className="flex items-center gap-3 text-sm"
+                                            >
+                                                <span
+                                                    className={
+                                                        requirement.completed
+                                                            ? "text-green-400"
+                                                            : "text-red-400"
+                                                    }
+                                                >
+                                                    {requirement.completed ? "✓" : "✕"}
+                                                </span>
+
+                                                <span
+                                                    className={
+                                                        requirement.completed
+                                                            ? "text-slate-300"
+                                                            : "text-red-300"
+                                                    }
+                                                >
+                                                    {requirement.label}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {!canApprove && (
+                                        <p className="mt-4 rounded-lg border border-yellow-500/20 bg-yellow-500/5 p-3 text-sm text-yellow-400">
+                                            This request cannot be approved until all four requirements are satisfied.
+                                            Review the missing requirements above.
+                                        </p>
+                                    )}
+
+                                    {canApprove && (
+                                        <p className="mt-4 rounded-lg border border-green-500/20 bg-green-500/5 p-3 text-sm text-green-400">
+                                            All mandatory verification requirements are satisfied. This request is eligible for approval.
+                                        </p>
+                                    )}
+
+                                </div>
+
                                 {/* DOCUMENT STATUS */}
                                 <div className="mb-7">
                                     <p className="text-xs text-slate-500">
-                                        Documents Status
+                                        Request Documents Status
                                     </p>
                                     <p className="mt-1 text-sm capitalize text-slate-200">
                                         {selectedCompany.documents_status.replaceAll("_", " ")}
@@ -625,23 +801,21 @@ export default function CompanyVerificationPage() {
                                 <div className="flex flex-col gap-3 border-t border-slate-800 pt-6 sm:flex-row">
 
                                     <button
-                                        disabled={actionLoading}
-                                        onClick={() =>
-                                            handleApprove(selectedCompany.id)
-                                        }
-                                        className="flex-1 rounded-lg bg-green-600 px-5 py-3 font-semibold transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                        disabled={actionLoading || !canApprove}
+                                        onClick={() => handleApprove(selectedCompany)}
+                                        className="flex-1 rounded-lg bg-green-600 px-5 py-3 font-semibold transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
-                                        {actionLoading ? "Processing..." : "✓ Approve Company"}
+                                        {actionLoading
+                                            ? "Processing..."
+                                            : "✓ Approve Request"}
                                     </button>
 
                                     <button
                                         disabled={actionLoading}
-                                        onClick={() =>
-                                            handleReject(selectedCompany.id)
-                                        }
+                                        onClick={() => openRejectModal(selectedCompany)}
                                         className="flex-1 rounded-lg border border-red-500/40 bg-red-500/10 px-5 py-3 font-semibold text-red-400 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                        {actionLoading ? "Processing..." : "✕ Reject Company"}
+                                        ✕ Reject Request
                                     </button>
 
                                 </div>
@@ -653,6 +827,102 @@ export default function CompanyVerificationPage() {
 
                 </div>
             </div>
+
+            {/* ------------------------------------------ */}
+            {/* REJECTION REASON MODAL */}
+            {/* ------------------------------------------ */}
+
+            {showRejectModal && rejectingCompany && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+                    onMouseDown={(e) => {
+                        if (e.target === e.currentTarget) {
+                            closeRejectModal();
+                        }
+                    }}
+                >
+                    <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <h2 className="text-xl font-bold text-white">
+                                    Reject Verification Request
+                                </h2>
+
+                                <p className="mt-2 text-sm text-slate-400">
+                                    You are rejecting the verification request for{" "}
+                                    <span className="font-semibold text-white">
+                                        {rejectingCompany.name}
+                                    </span>.
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                disabled={actionLoading}
+                                onClick={closeRejectModal}
+                                className="text-xl text-slate-400 transition hover:text-white disabled:opacity-40"
+                                aria-label="Close rejection modal"
+                            >
+                                ×
+                            </button>
+                        </div>
+
+                        <label className="mt-6 block text-sm font-medium text-slate-300">
+                            Rejection Reason
+                        </label>
+
+                        <textarea
+                            value={rejectionReason}
+                            onChange={(e) => setRejectionReason(e.target.value)}
+                            placeholder="Explain why this verification request is being rejected..."
+                            rows={5}
+                            maxLength={1000}
+                            disabled={actionLoading}
+                            className="mt-2 w-full resize-none rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-blue-500 disabled:opacity-50"
+                        />
+
+                        <p className="mt-1 text-right text-xs text-slate-500">
+                            {rejectionReason.length}/1000 characters
+                        </p>
+
+                        {error && showRejectModal && (
+                            <p className="mt-3 text-sm text-red-400">
+                                {error}
+                            </p>
+                        )}
+
+                        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row">
+
+                            <button
+                                type="button"
+                                disabled={actionLoading}
+                                onClick={closeRejectModal}
+                                className="flex-1 rounded-lg border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-300 transition hover:bg-slate-800 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                type="button"
+                                disabled={
+                                    actionLoading ||
+                                    !rejectionReason.trim()
+                                }
+                                onClick={handleReject}
+                                className="flex-1 rounded-lg bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                {actionLoading
+                                    ? "Rejecting..."
+                                    : "Confirm Rejection"}
+                            </button>
+
+                        </div>
+
+                    </div>
+                </div>
+            )}
+
         </main>
     );
 }

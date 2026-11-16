@@ -23,38 +23,74 @@ interface Company {
     verification_status: string;
 }
 
+interface VerificationRequest {
+    id: number;
+    request_type: string;
+    version_number: number;
+    status: string;
+    document_1_uploaded: boolean;
+    document_2_uploaded: boolean;
+    submitted_at: string | null;
+    reviewed_at: string | null;
+    rejection_reason: string | null;
+    business_email: string | null;
+    business_email_verified: boolean;
+    business_email_verified_at: string | null;
+}
+
+interface VerificationInfo {
+    company_id: number;
+    verification_status: string;
+    documents_status: string;
+    business_email: string | null;
+    business_email_verified: boolean;
+    business_phone: string | null;
+    business_address: string | null;
+    latest_request: VerificationRequest | null;
+}
+
 interface ApiMessage {
-    message: string;
+    message?: string;
     business_email?: string;
-    business_email_verified?: boolean;
-    documents_status?: string;
-    verification_status?: string;
+    request_id?: number;
+    request_type?: string;
+    version_number?: number;
+    request_status?: string;
 }
 
 export default function CompanyVerificationPage() {
     const router = useRouter();
 
     const [company, setCompany] = useState<Company | null>(null);
+    const [verificationInfo, setVerificationInfo] =
+        useState<VerificationInfo | null>(null);
+
     const [businessEmail, setBusinessEmail] = useState("");
     const [otp, setOtp] = useState("");
 
     const [otpSent, setOtpSent] = useState(false);
+
     const [document1Exists, setDocument1Exists] = useState(false);
     const [document2Exists, setDocument2Exists] = useState(false);
 
     const [loading, setLoading] = useState(true);
     const [sendingOtp, setSendingOtp] = useState(false);
     const [verifyingOtp, setVerifyingOtp] = useState(false);
+
     const [uploadingDocument, setUploadingDocument] =
         useState<number | null>(null);
-    const [deletingDocument, setDeletingDocument] =
-        useState<number | null>(null);
+
+    const [requestingVerification, setRequestingVerification] =
+        useState(false);
+
+    const [submittingVerification, setSubmittingVerification] =
+        useState(false);
 
     const [message, setMessage] = useState("");
     const [error, setError] = useState("");
 
     // --------------------------------------------------
-    // LOAD COMPANY AND DOCUMENT STATUS
+    // LOAD COMPANY DATA
     // --------------------------------------------------
 
     async function loadCompanyData() {
@@ -62,21 +98,39 @@ export default function CompanyVerificationPage() {
             setLoading(true);
             setError("");
 
-            const companyData: Company = await apiRequest(
-                "/companies/my-admin-company"
-            );
+            const [companyData, verificationData] = await Promise.all([
+                apiRequest(
+                    "/companies/my-admin-company"
+                ) as Promise<Company>,
 
-            setCompany(companyData);
-            setBusinessEmail(companyData.business_email || "");
-
-            // Check whether each document already exists.
-            const [document1, document2] = await Promise.all([
-                checkDocumentExists(1),
-                checkDocumentExists(2),
+                apiRequest(
+                    "/companies/my-admin-company/verification"
+                ) as Promise<VerificationInfo>,
             ]);
 
-            setDocument1Exists(document1);
-            setDocument2Exists(document2);
+            setCompany(companyData);
+            setVerificationInfo(verificationData);
+
+            const latest = verificationData.latest_request;
+
+            // Email verification belongs to the latest request, not the company.
+            setBusinessEmail(
+                latest?.business_email ||
+                verificationData.business_email ||
+                companyData.business_email ||
+                ""
+            );
+
+            setOtpSent(false);
+            setOtp("");
+
+            setDocument1Exists(
+                latest?.document_1_uploaded ?? false
+            );
+
+            setDocument2Exists(
+                latest?.document_2_uploaded ?? false
+            );
         } catch (err) {
             if (err instanceof ApiError && err.status === 401) {
                 localStorage.removeItem("access_token");
@@ -94,96 +148,241 @@ export default function CompanyVerificationPage() {
         }
     }
 
-    // --------------------------------------------------
-    // CHECK WHETHER A DOCUMENT EXISTS
-    // --------------------------------------------------
-
-    async function checkDocumentExists(
-        documentNumber: number
-    ): Promise<boolean> {
-        try {
-            await apiFileRequest(
-                `/companies/my-admin-company/documents/${documentNumber}`
-            );
-
-            return true;
-        } catch (err) {
-            if (err instanceof ApiError && err.status === 404) {
-                return false;
-            }
-
-            throw err;
-        }
-    }
-
     useEffect(() => {
         loadCompanyData();
-        // Load once when the page opens.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // --------------------------------------------------
-    // SEND COMPANY EMAIL OTP
+    // REQUEST STATUS AND CONDITIONS
     // --------------------------------------------------
 
-   async function handleSendOtp() {
-    const email = businessEmail.trim().toLowerCase();
+    const latestRequest =
+        verificationInfo?.latest_request ?? null;
 
-    if (!email) {
-        setError("Please enter your official business email.");
-        return;
-    }
+    const isCompanyVerified =
+        company?.verification_status === "verified";
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        setError("Please enter a valid business email address.");
-        return;
-    }
+    const isRequestPending =
+        latestRequest?.status === "pending" ||
+        latestRequest?.status === "pending_review" ||
+        latestRequest?.status === "submitted";
 
-    try {
-        setSendingOtp(true);
-        setError("");
-        setMessage("");
+    const hasUpdatedDraft =
+        latestRequest?.status === "draft" &&
+        latestRequest?.request_type === "updated";
 
-        console.log("Sending business email OTP:", email);
+    const hasInitialDraft =
+        latestRequest?.status === "draft" &&
+        latestRequest?.request_type === "initial";
 
-        const result: ApiMessage = await apiRequest(
-            "/companies/my-admin-company/business-email/send-otp",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    business_email: email,
-                }),
-            }
+    const isRejectedRequest =
+        latestRequest?.status === "rejected";
+
+    const isInitialRejection =
+        isRejectedRequest &&
+        latestRequest?.request_type === "initial";
+
+    const isUpdatedRejection =
+        isRejectedRequest &&
+        latestRequest?.request_type === "updated";
+
+    const hasNoRequest = latestRequest === null;
+
+    const isDraftRequest = latestRequest?.status === "draft";
+
+    // Each verification request has its own business-email verification.
+    const isBusinessEmailVerified =
+        latestRequest?.business_email_verified === true;
+
+    // Documents can only be uploaded into an active draft.
+    // Approved documents are never directly replaced.
+    const canUploadDocuments =
+        latestRequest?.status === "draft" &&
+        (
+            !isCompanyVerified ||
+            latestRequest.request_type === "updated"
         );
 
-        console.log("OTP API response:", result);
-
-        setBusinessEmail(result.business_email || email);
-        setOtpSent(true);
-        setOtp("");
-
-        setMessage(
-            result.message || "Verification OTP sent successfully."
+    // A company can:
+    // 1. Start its first verification.
+    // 2. Resubmit after any rejection.
+    // 3. Request updated verification when already verified.
+    const canRequestNewVerification =
+        !isRequestPending &&
+        (
+            hasNoRequest ||
+            isRejectedRequest ||
+            (isCompanyVerified && !hasUpdatedDraft)
         );
 
-    } catch (err) {
-        console.error("Business email OTP error:", err);
-
-        setError(
-            err instanceof Error
-                ? err.message
-                : "Unable to send verification OTP."
-        );
-    } finally {
-        setSendingOtp(false);
-    }
-}
+    const canSubmitVerification =
+        latestRequest?.status === "draft" &&
+        document1Exists &&
+        document2Exists &&
+        isBusinessEmailVerified;
 
     // --------------------------------------------------
-    // VERIFY COMPANY EMAIL OTP
+    // CREATE NEW VERIFICATION REQUEST
+    // --------------------------------------------------
+
+    async function handleRequestNewVerification() {
+        let confirmationMessage =
+            "Create a new verification request?";
+
+        if (hasNoRequest) {
+            confirmationMessage =
+                "Start your company's initial verification request?";
+        } else if (isRejectedRequest) {
+            confirmationMessage =
+                "Create a new resubmission request? Your previous rejected request and documents will be preserved.";
+        } else if (isCompanyVerified) {
+            confirmationMessage =
+                "Create a new verification request? Your existing approved verification will remain active while the new request is reviewed.";
+        }
+
+        const confirmed = window.confirm(confirmationMessage);
+
+        if (!confirmed) return;
+
+        try {
+            setRequestingVerification(true);
+            setError("");
+            setMessage("");
+
+            const result: ApiMessage = await apiRequest(
+                "/companies/my-admin-company/verification/request",
+                {
+                    method: "POST",
+                }
+            );
+
+            setMessage(
+                result.message ||
+                "New verification request created successfully."
+            );
+
+            await loadCompanyData();
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : "Unable to create a new verification request."
+            );
+        } finally {
+            setRequestingVerification(false);
+        }
+    }
+
+    // --------------------------------------------------
+    // SUBMIT VERIFICATION REQUEST
+    // --------------------------------------------------
+
+    async function handleSubmitVerification() {
+        if (!canSubmitVerification) {
+            setError(
+                "Upload both documents and verify your business email before submitting."
+            );
+            return;
+        }
+
+        const confirmed = window.confirm(
+            "Submit your company verification documents for Platform Admin review?"
+        );
+
+        if (!confirmed) return;
+
+        try {
+            setSubmittingVerification(true);
+            setError("");
+            setMessage("");
+
+            const result: ApiMessage = await apiRequest(
+                "/companies/my-admin-company/verification/submit",
+                {
+                    method: "POST",
+                }
+            );
+
+            setMessage(
+                result.message ||
+                "Verification request submitted successfully."
+            );
+
+            await loadCompanyData();
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : "Unable to submit verification request."
+            );
+        } finally {
+            setSubmittingVerification(false);
+        }
+    }
+
+    // --------------------------------------------------
+    // SEND BUSINESS EMAIL OTP
+    // --------------------------------------------------
+
+    async function handleSendOtp() {
+        if (!isDraftRequest) {
+            setError(
+                "Create a verification request before verifying its business email."
+            );
+            return;
+        }
+
+        const email = businessEmail.trim().toLowerCase();
+
+        if (!email) {
+            setError("Please enter your official business email.");
+            return;
+        }
+
+        try {
+            setSendingOtp(true);
+            setError("");
+            setMessage("");
+
+            const result: ApiMessage = await apiRequest(
+                "/companies/my-admin-company/business-email/send-otp",
+                {
+                    method: "POST",
+                    body: JSON.stringify({
+                        business_email: email,
+                    }),
+                }
+            );
+
+            setBusinessEmail(result.business_email || email);
+            setOtpSent(true);
+            setOtp("");
+
+            setMessage(
+                result.message || "Verification OTP sent successfully."
+            );
+        } catch (err) {
+            setError(
+                err instanceof Error
+                    ? err.message
+                    : "Unable to send verification OTP."
+            );
+        } finally {
+            setSendingOtp(false);
+        }
+    }
+
+    // --------------------------------------------------
+    // VERIFY BUSINESS EMAIL OTP
     // --------------------------------------------------
 
     async function handleVerifyOtp() {
+        if (otp.length !== 6) {
+            setError("Please enter the complete 6-digit OTP.");
+            return;
+        }
+
         try {
             setVerifyingOtp(true);
             setError("");
@@ -193,9 +392,7 @@ export default function CompanyVerificationPage() {
                 "/companies/my-admin-company/business-email/verify-otp",
                 {
                     method: "POST",
-                    body: JSON.stringify({
-                        otp: otp,
-                    }),
+                    body: JSON.stringify({ otp }),
                 }
             );
 
@@ -203,7 +400,7 @@ export default function CompanyVerificationPage() {
             setOtp("");
 
             setMessage(
-                result.message || "Company email verified successfully."
+                result.message || "Business email verified successfully."
             );
 
             await loadCompanyData();
@@ -211,7 +408,7 @@ export default function CompanyVerificationPage() {
             setError(
                 err instanceof Error
                     ? err.message
-                    : "Unable to verify company email."
+                    : "Unable to verify business email."
             );
         } finally {
             setVerifyingOtp(false);
@@ -219,7 +416,7 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // UPLOAD OR REPLACE DOCUMENT
+    // UPLOAD DOCUMENT
     // --------------------------------------------------
 
     async function handleDocumentUpload(
@@ -227,6 +424,13 @@ export default function CompanyVerificationPage() {
         file: File | undefined
     ) {
         if (!file) return;
+
+        if (!canUploadDocuments) {
+            setError(
+                "Create a new verification request before uploading documents."
+            );
+            return;
+        }
 
         const allowedExtensions = [
             "pdf",
@@ -259,7 +463,6 @@ export default function CompanyVerificationPage() {
             setMessage("");
 
             const formData = new FormData();
-
             formData.append("file", file);
 
             const result: ApiMessage = await apiRequest(
@@ -287,12 +490,10 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // VIEW / DOWNLOAD DOCUMENT
+    // VIEW DOCUMENT
     // --------------------------------------------------
 
-    async function handleViewDocument(
-        documentNumber: number
-    ) {
+    async function handleViewDocument(documentNumber: number) {
         try {
             setError("");
 
@@ -302,18 +503,12 @@ export default function CompanyVerificationPage() {
 
             const objectUrl = URL.createObjectURL(blob);
 
-            // Open the authenticated file in a new browser tab.
-            const link = document.createElement("a");
+            window.open(
+                objectUrl,
+                "_blank",
+                "noopener,noreferrer"
+            );
 
-            link.href = objectUrl;
-            link.target = "_blank";
-            link.rel = "noopener noreferrer";
-
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-
-            // Keep the URL alive briefly so the browser can load it.
             window.setTimeout(() => {
                 URL.revokeObjectURL(objectUrl);
             }, 60000);
@@ -327,59 +522,25 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // DELETE DOCUMENT
-    // --------------------------------------------------
-
-    async function handleDeleteDocument(
-        documentNumber: number
-    ) {
-        const confirmed = window.confirm(
-            `Are you sure you want to delete document ${documentNumber}?`
-        );
-
-        if (!confirmed) return;
-
-        try {
-            setDeletingDocument(documentNumber);
-            setError("");
-            setMessage("");
-
-            const result: ApiMessage = await apiRequest(
-                `/companies/my-admin-company/documents/${documentNumber}`,
-                {
-                    method: "DELETE",
-                }
-            );
-
-            setMessage(
-                result.message || "Document deleted successfully."
-            );
-
-            await loadCompanyData();
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Unable to delete document."
-            );
-        } finally {
-            setDeletingDocument(null);
-        }
-    }
-
-    // --------------------------------------------------
-    // STATUS BADGE
+    // STATUS STYLING
     // --------------------------------------------------
 
     function getStatusStyle(status: string) {
         switch (status) {
             case "verified":
+            case "approved":
                 return "bg-green-500/10 text-green-400 border-green-500/30";
 
+            case "pending":
             case "pending_review":
             case "submitted":
                 return "bg-yellow-500/10 text-yellow-400 border-yellow-500/30";
 
+            case "rejected":
+            case "inactive":
+                return "bg-red-500/10 text-red-400 border-red-500/30";
+
+            case "draft":
             case "in_progress":
                 return "bg-blue-500/10 text-blue-400 border-blue-500/30";
 
@@ -390,6 +551,96 @@ export default function CompanyVerificationPage() {
 
     function formatStatus(status: string) {
         return status.replaceAll("_", " ");
+    }
+
+    // --------------------------------------------------
+    // DOCUMENT CARD
+    // --------------------------------------------------
+
+    function renderDocumentCard(
+        documentNumber: number,
+        documentExists: boolean
+    ) {
+        const documentTitle =
+            documentNumber === 1
+                ? "Company Registration Proof"
+                : "Business Address Proof";
+
+        return (
+            <div
+                key={documentNumber}
+                className="rounded-xl border border-slate-700 bg-slate-950 p-5"
+            >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h4 className="font-semibold">
+                            {documentTitle}
+                        </h4>
+
+                        <p className="mt-1 text-sm text-slate-400">
+                            {documentExists
+                                ? "Document uploaded for this request"
+                                : "No document uploaded for this request"}
+                        </p>
+                    </div>
+
+                    <span
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                            documentExists
+                                ? getStatusStyle("verified")
+                                : getStatusStyle("unverified")
+                        }`}
+                    >
+                        {documentExists ? "Uploaded" : "Missing"}
+                    </span>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                    {canUploadDocuments && (
+                        <label
+                            className={`cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500 ${
+                                uploadingDocument !== null
+                                    ? "pointer-events-none opacity-50"
+                                    : ""
+                            }`}
+                        >
+                            {uploadingDocument === documentNumber
+                                ? "Uploading..."
+                                : documentExists
+                                    ? "Replace Draft Document"
+                                    : "Upload Document"}
+
+                            <input
+                                type="file"
+                                accept=".pdf,.docx,.jpg,.jpeg,.png"
+                                className="hidden"
+                                disabled={uploadingDocument !== null}
+                                onChange={(e) => {
+                                    handleDocumentUpload(
+                                        documentNumber,
+                                        e.target.files?.[0]
+                                    );
+
+                                    e.currentTarget.value = "";
+                                }}
+                            />
+                        </label>
+                    )}
+
+                    {documentExists && (
+                        <button
+                            type="button"
+                            onClick={() =>
+                                handleViewDocument(documentNumber)
+                            }
+                            className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:border-blue-500"
+                        >
+                            View Document
+                        </button>
+                    )}
+                </div>
+            </div>
+        );
     }
 
     // --------------------------------------------------
@@ -422,17 +673,13 @@ export default function CompanyVerificationPage() {
     }
 
     // --------------------------------------------------
-    // MAIN UI
+    // MAIN PAGE
     // --------------------------------------------------
 
     return (
         <main className="min-h-screen bg-slate-950 text-white">
-
-            {/* NAVIGATION */}
-
             <nav className="border-b border-slate-800">
-                <div className="mx-auto max-w-5xl px-6 py-5 flex justify-between items-center">
-
+                <div className="mx-auto max-w-5xl px-6 py-5 flex items-center justify-between">
                     <h1 className="text-2xl font-bold">
                         <span className="text-blue-500">Hire</span>
                         Swipe
@@ -444,16 +691,12 @@ export default function CompanyVerificationPage() {
                     >
                         ← Dashboard
                     </button>
-
                 </div>
             </nav>
 
             <div className="mx-auto max-w-5xl px-6 py-10">
-
-                {/* HEADER */}
-
                 <section className="mb-8">
-                    <p className="text-blue-400 text-sm uppercase tracking-wider">
+                    <p className="text-sm uppercase tracking-wider text-blue-400">
                         Company Admin
                     </p>
 
@@ -462,22 +705,14 @@ export default function CompanyVerificationPage() {
                     </h2>
 
                     <p className="mt-2 text-slate-400">
-                        Verify your company's official email address
-                        and submit the required documents.
+                        Verify your company's official email and submit
+                        the required documents.
                     </p>
 
                     <p className="mt-4 text-lg font-semibold">
                         {company.name}
                     </p>
-
-                    {company.website && (
-                        <p className="text-sm text-slate-500">
-                            {company.website}
-                        </p>
-                    )}
                 </section>
-
-                {/* SUCCESS MESSAGE */}
 
                 {message && (
                     <div className="mb-6 rounded-xl border border-green-500/30 bg-green-500/10 p-4 text-sm text-green-400">
@@ -485,44 +720,40 @@ export default function CompanyVerificationPage() {
                     </div>
                 )}
 
-                {/* ERROR MESSAGE */}
-
                 {error && (
                     <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
                         {error}
                     </div>
                 )}
 
-                {/* OVERALL STATUS */}
+                {/* VERIFICATION OVERVIEW */}
 
                 <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-                    <h3 className="text-lg font-semibold mb-5">
+                    <h3 className="mb-5 text-lg font-semibold">
                         Verification Overview
                     </h3>
 
                     <div className="grid gap-5 sm:grid-cols-3">
-
                         <div>
-                            <p className="text-sm text-slate-400 mb-2">
+                            <p className="mb-2 text-sm text-slate-400">
                                 Business Email
                             </p>
 
                             <span
-                                className={`inline-block rounded-full border px-3 py-1 text-xs capitalize ${getStatusStyle(
-                                    company.business_email_verified
+                                className={`inline-block rounded-full border px-3 py-1 text-xs ${getStatusStyle(
+                                    isBusinessEmailVerified
                                         ? "verified"
                                         : "unverified"
                                 )}`}
                             >
-                                {company.business_email_verified
-                                    ? "Verified"
-                                    : "Unverified"}
+                                {isBusinessEmailVerified
+                                    ? "Verified for this request"
+                                    : "Unverified for this request"}
                             </span>
                         </div>
 
                         <div>
-                            <p className="text-sm text-slate-400 mb-2">
+                            <p className="mb-2 text-sm text-slate-400">
                                 Documents
                             </p>
 
@@ -536,7 +767,7 @@ export default function CompanyVerificationPage() {
                         </div>
 
                         <div>
-                            <p className="text-sm text-slate-400 mb-2">
+                            <p className="mb-2 text-sm text-slate-400">
                                 Overall Verification
                             </p>
 
@@ -548,16 +779,191 @@ export default function CompanyVerificationPage() {
                                 {formatStatus(company.verification_status)}
                             </span>
                         </div>
-
                     </div>
+
+                    {latestRequest && (
+                        <div className="mt-6 border-t border-slate-800 pt-5">
+                            <h4 className="font-semibold">
+                                Latest Verification Request
+                            </h4>
+
+                            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                                <div>
+                                    <p className="text-xs text-slate-500">
+                                        Request Type
+                                    </p>
+                                    <p className="mt-1 capitalize">
+                                        {latestRequest.request_type}
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <p className="text-xs text-slate-500">
+                                        Version
+                                    </p>
+                                    <p className="mt-1">
+                                        {latestRequest.version_number}
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <p className="text-xs text-slate-500">
+                                        Request Status
+                                    </p>
+
+                                    <span
+                                        className={`mt-1 inline-block rounded-full border px-3 py-1 text-xs capitalize ${getStatusStyle(
+                                            latestRequest.status
+                                        )}`}
+                                    >
+                                        {formatStatus(latestRequest.status)}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {latestRequest.rejection_reason && (
+                                <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/10 p-4">
+                                    <p className="font-semibold text-red-400">
+                                        Rejection Reason
+                                    </p>
+
+                                    <p className="mt-1 text-sm text-slate-300">
+                                        {latestRequest.rejection_reason}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </section>
+
+                {/* CREATE INITIAL / NEW VERIFICATION REQUEST */}
+
+                {canRequestNewVerification && (
+                    <section className="mb-8 rounded-2xl border border-blue-500/30 bg-blue-500/5 p-6">
+                        <h3 className="text-lg font-semibold">
+                            {hasNoRequest
+                                ? "Start Company Verification"
+                                : isRejectedRequest
+                                    ? "Resubmit Company Verification"
+                                    : "Update Company Verification"}
+                        </h3>
+
+                        <p className="mt-2 text-sm text-slate-400">
+                            {hasNoRequest
+                                ? "Create your initial verification request before uploading the required company documents."
+                                : isInitialRejection
+                                    ? "Your initial verification request was rejected. Create a new request to upload corrected documents. Your previous request will be preserved."
+                                    : isUpdatedRejection
+                                        ? "Your updated verification request was rejected. Create another request to upload corrected documents. Your previous approved documents and request history will be preserved."
+                                        : "Create a new verification request to update your company's legal documents. Your existing approved verification will remain active while the new request is reviewed."}
+                        </p>
+
+                        <button
+                            type="button"
+                            onClick={handleRequestNewVerification}
+                            disabled={requestingVerification}
+                            className="mt-5 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold hover:bg-blue-500 disabled:opacity-50"
+                        >
+                            {requestingVerification
+                                ? "Creating Request..."
+                                : hasNoRequest
+                                    ? "Start Verification"
+                                    : isRejectedRequest
+                                        ? "Request Resubmission"
+                                        : "Request New Verification"}
+                        </button>
+                    </section>
+                )}
+
+                {/* REJECTION NOTICE */}
+
+                {isRejectedRequest && (
+                    <section className="mb-8 rounded-xl border border-red-500/30 bg-red-500/10 p-5">
+                        <h3 className="font-semibold text-red-400">
+                            Previous Verification Rejected
+                        </h3>
+
+                        <p className="mt-2 text-sm text-slate-300">
+                            {isInitialRejection
+                                ? "Create a new initial verification request before uploading corrected documents."
+                                : "Your re-verification request was rejected. Create another request before uploading corrected documents."}
+                        </p>
+
+                        {latestRequest?.rejection_reason && (
+                            <p className="mt-3 text-sm text-slate-300">
+                                <strong className="text-red-400">
+                                    Reason:
+                                </strong>{" "}
+                                {latestRequest.rejection_reason}
+                            </p>
+                        )}
+                    </section>
+                )}
+
+                {/* INACTIVE COMPANY NOTICE */}
+
+                {company.verification_status === "inactive" && (
+                    <section className="mb-8 rounded-xl border border-red-500/30 bg-red-500/10 p-5">
+                        <h3 className="font-semibold text-red-400">
+                            Company Verification Inactive
+                        </h3>
+
+                        <p className="mt-2 text-sm text-slate-300">
+                            Your latest re-verification request was rejected.
+                            Your company will remain inactive until a new
+                            verification request is approved by the Platform Admin.
+                        </p>
+                    </section>
+                )}
+
+                {/* PENDING NOTICE */}
+
+                {isRequestPending && (
+                    <section className="mb-8 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-5">
+                        <h3 className="font-semibold text-yellow-400">
+                            Verification Under Review
+                        </h3>
+
+                        <p className="mt-2 text-sm text-slate-300">
+                            Your documents have been submitted and are
+                            awaiting Platform Admin review.
+                        </p>
+
+                        {isCompanyVerified && (
+                            <p className="mt-2 text-sm text-green-400">
+                                Your existing company verification remains active.
+                            </p>
+                        )}
+                    </section>
+                )}
+
+                {/* DRAFT NOTICE */}
+
+                {latestRequest?.status === "draft" && (
+                    <section className="mb-8 rounded-xl border border-blue-500/30 bg-blue-500/10 p-5">
+                        <h3 className="font-semibold text-blue-400">
+                            Verification Request Ready for Documents
+                        </h3>
+
+                        <p className="mt-2 text-sm text-slate-300">
+                            Upload the required documents for this request.
+                            You can submit it after both documents and your
+                            business email have been verified.
+                        </p>
+
+                        {isCompanyVerified && hasUpdatedDraft && (
+                            <p className="mt-2 text-sm text-green-400">
+                                Your existing approved company verification
+                                remains active while this request is being prepared.
+                            </p>
+                        )}
+                    </section>
+                )}
 
                 {/* BUSINESS EMAIL VERIFICATION */}
 
                 <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-                    <div className="flex flex-wrap justify-between gap-3 items-center mb-5">
-
+                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <h3 className="text-xl font-semibold">
                                 Business Email Verification
@@ -568,28 +974,33 @@ export default function CompanyVerificationPage() {
                             </p>
                         </div>
 
-                        {company.business_email_verified && (
-                            <span className="text-green-400 text-sm font-semibold">
-                                ✓ Verified
+                        {isBusinessEmailVerified && (
+                            <span className="text-sm font-semibold text-green-400">
+                                ✓ Verified for this request
                             </span>
                         )}
-
                     </div>
 
-                    <label className="block text-sm text-slate-300 mb-2">
+                    <label className="mb-2 block text-sm text-slate-300">
                         Official Business Email
                     </label>
 
                     <input
                         type="email"
                         value={businessEmail}
-                        onChange={(e) => setBusinessEmail(e.target.value)}
-                        disabled={company.business_email_verified}
+                        onChange={(e) => {
+                            setBusinessEmail(e.target.value);
+                            setOtpSent(false);
+                            setOtp("");
+                            setError("");
+                            setMessage("");
+                        }}
+                        disabled={!isDraftRequest || isBusinessEmailVerified}
                         placeholder="hr@yourcompany.com"
                         className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:opacity-60"
                     />
 
-                    {!company.business_email_verified && (
+                    {isDraftRequest && !isBusinessEmailVerified && (
                         <button
                             type="button"
                             onClick={handleSendOtp}
@@ -604,217 +1015,128 @@ export default function CompanyVerificationPage() {
                         </button>
                     )}
 
-                    {otpSent && !company.business_email_verified && (
+                    {otpSent && isDraftRequest && !isBusinessEmailVerified && (
                         <div className="mt-6 border-t border-slate-800 pt-5">
-
-                            <label className="block text-sm text-slate-300 mb-2">
+                            <label className="mb-2 block text-sm text-slate-300">
                                 Enter the OTP sent to your business email
                             </label>
 
                             <input
                                 type="text"
+                                inputMode="numeric"
                                 value={otp}
                                 onChange={(e) =>
                                     setOtp(
-                                        e.target.value.replace(/\D/g, "").slice(0, 6)
+                                        e.target.value
+                                            .replace(/\D/g, "")
+                                            .slice(0, 6)
                                     )
                                 }
                                 maxLength={6}
                                 placeholder="Enter OTP"
-                                className="w-full max-w-xs rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white tracking-widest outline-none focus:border-blue-500"
+                                className="w-full max-w-xs rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 tracking-widest text-white outline-none focus:border-blue-500"
                             />
 
                             <button
+                                type="button"
                                 onClick={handleVerifyOtp}
-                                disabled={verifyingOtp || otp.trim().length === 0}
+                                disabled={verifyingOtp || otp.length !== 6}
                                 className="mt-4 block rounded-lg bg-green-600 px-5 py-3 text-sm font-semibold hover:bg-green-500 disabled:opacity-50"
                             >
                                 {verifyingOtp
                                     ? "Verifying..."
                                     : "Verify Email"}
                             </button>
-
                         </div>
                     )}
-
                 </section>
 
                 {/* DOCUMENT VERIFICATION */}
 
                 <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
                     <h3 className="text-xl font-semibold">
                         Company Document Verification
                     </h3>
 
-                    <p className="mt-2 mb-6 text-sm text-slate-400">
-                        Upload the two required company verification documents.
-                        Accepted formats: PDF, DOCX, JPG, JPEG and PNG.
-                        Maximum size: 5 MB per document.
+                    <p className="mb-6 mt-2 text-sm text-slate-400">
+                        Upload the two required company verification
+                        documents. Accepted formats: PDF, DOCX, JPG,
+                        JPEG and PNG. Maximum size: 5 MB per document.
                     </p>
 
-                    {/* DOCUMENT 1 */}
-
-                    <div className="mb-6 rounded-xl border border-slate-700 bg-slate-950 p-5">
-
-                        <div className="flex flex-wrap justify-between gap-3 items-center">
-
-                            <div>
-                                <h4 className="font-semibold">
-                                    Company Document 1
-                                </h4>
-
-                                <p className="mt-1 text-sm text-slate-400">
-                                    {document1Exists
-                                        ? "Document uploaded"
-                                        : "No document uploaded"}
-                                </p>
-                            </div>
-
-                            <span
-                                className={`rounded-full border px-3 py-1 text-xs ${document1Exists
-                                    ? getStatusStyle("verified")
-                                    : getStatusStyle("unverified")
-                                    }`}
-                            >
-                                {document1Exists ? "Uploaded" : "Missing"}
-                            </span>
-
+                    {!canUploadDocuments && !isRequestPending && (
+                        <div className="mb-6 rounded-lg border border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
+                            {hasNoRequest
+                                ? "Start your verification request before uploading documents."
+                                : isRejectedRequest
+                                    ? "Create a new resubmission request before uploading corrected documents."
+                                    : isCompanyVerified
+                                        ? "Click Request New Verification before uploading updated documents."
+                                        : "Create a verification request before uploading documents."}
                         </div>
+                    )}
 
-                        <div className="mt-5 flex flex-wrap gap-3">
-
-                            <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500">
-                                {uploadingDocument === 1
-                                    ? "Uploading..."
-                                    : document1Exists
-                                        ? "Replace Document"
-                                        : "Upload Document"}
-
-                                <input
-                                    type="file"
-                                    accept=".pdf,.docx,.jpg,.jpeg,.png"
-                                    className="hidden"
-                                    disabled={uploadingDocument !== null}
-                                    onChange={(e) => {
-                                        handleDocumentUpload(
-                                            1,
-                                            e.target.files?.[0]
-                                        );
-                                        e.currentTarget.value = "";
-                                    }}
-                                />
-                            </label>
-
-                            {document1Exists && (
-                                <>
-                                    <button
-                                        onClick={() => handleViewDocument(1)}
-                                        className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:border-blue-500"
-                                    >
-                                        View Document
-                                    </button>
-
-                                    <button
-                                        onClick={() => handleDeleteDocument(1)}
-                                        disabled={deletingDocument !== null}
-                                        className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
-                                    >
-                                        {deletingDocument === 1
-                                            ? "Deleting..."
-                                            : "Delete"}
-                                    </button>
-                                </>
-                            )}
-
-                        </div>
+                    <div className="grid gap-6">
+                        {renderDocumentCard(1, document1Exists)}
+                        {renderDocumentCard(2, document2Exists)}
                     </div>
 
-                    {/* DOCUMENT 2 */}
+                    {/* SUBMIT BUTTON */}
 
-                    <div className="rounded-xl border border-slate-700 bg-slate-950 p-5">
+                    {canSubmitVerification && (
+                        <div className="mt-8 border-t border-slate-800 pt-6">
+                            <h4 className="font-semibold">
+                                Ready to Submit?
+                            </h4>
 
-                        <div className="flex flex-wrap justify-between gap-3 items-center">
+                            <p className="mt-2 text-sm text-slate-400">
+                                Both documents have been uploaded and
+                                your business email is verified.
+                                Submit your request for Platform Admin review.
+                            </p>
 
-                            <div>
+                            <button
+                                type="button"
+                                onClick={handleSubmitVerification}
+                                disabled={submittingVerification}
+                                className="mt-5 rounded-lg bg-green-600 px-6 py-3 text-sm font-semibold hover:bg-green-500 disabled:opacity-50"
+                            >
+                                {submittingVerification
+                                    ? "Submitting..."
+                                    : "Submit Verification Request"}
+                            </button>
+                        </div>
+                    )}
+
+                    {/* REQUIREMENTS CHECKLIST */}
+
+                    {latestRequest?.status === "draft" &&
+                        !canSubmitVerification && (
+                            <div className="mt-8 border-t border-slate-800 pt-6">
                                 <h4 className="font-semibold">
-                                    Company Document 2
+                                    Complete the Requirements
                                 </h4>
 
-                                <p className="mt-1 text-sm text-slate-400">
-                                    {document2Exists
-                                        ? "Document uploaded"
-                                        : "No document uploaded"}
-                                </p>
+                                <ul className="mt-3 space-y-2 text-sm text-slate-400">
+                                    <li>
+                                        {document1Exists ? "✓" : "○"} Company registration proof uploaded
+                                    </li>
+
+                                    <li>
+                                        {document2Exists ? "✓" : "○"} Business address proof uploaded
+                                    </li>
+
+                                    <li>
+                                        {isBusinessEmailVerified ? "✓" : "○"} Business email verified for this request
+                                    </li>
+                                </ul>
                             </div>
-
-                            <span
-                                className={`rounded-full border px-3 py-1 text-xs ${document2Exists
-                                    ? getStatusStyle("verified")
-                                    : getStatusStyle("unverified")
-                                    }`}
-                            >
-                                {document2Exists ? "Uploaded" : "Missing"}
-                            </span>
-
-                        </div>
-
-                        <div className="mt-5 flex flex-wrap gap-3">
-
-                            <label className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500">
-                                {uploadingDocument === 2
-                                    ? "Uploading..."
-                                    : document2Exists
-                                        ? "Replace Document"
-                                        : "Upload Document"}
-
-                                <input
-                                    type="file"
-                                    accept=".pdf,.docx,.jpg,.jpeg,.png"
-                                    className="hidden"
-                                    disabled={uploadingDocument !== null}
-                                    onChange={(e) => {
-                                        handleDocumentUpload(
-                                            2,
-                                            e.target.files?.[0]
-                                        );
-                                        e.currentTarget.value = "";
-                                    }}
-                                />
-                            </label>
-
-                            {document2Exists && (
-                                <>
-                                    <button
-                                        onClick={() => handleViewDocument(2)}
-                                        className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:border-blue-500"
-                                    >
-                                        View Document
-                                    </button>
-
-                                    <button
-                                        onClick={() => handleDeleteDocument(2)}
-                                        disabled={deletingDocument !== null}
-                                        className="rounded-lg border border-red-500/30 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
-                                    >
-                                        {deletingDocument === 2
-                                            ? "Deleting..."
-                                            : "Delete"}
-                                    </button>
-                                </>
-                            )}
-
-                        </div>
-                    </div>
-
+                        )}
                 </section>
-
-                {/* FOOTER */}
 
                 <footer className="mt-10 border-t border-slate-800 pt-6 text-center text-sm text-slate-500">
                     HireSwipe • Company Verification
                 </footer>
-
             </div>
         </main>
     );

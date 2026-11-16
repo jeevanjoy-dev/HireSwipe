@@ -5,326 +5,409 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiRequest } from "../../../services/api";
 
-interface AdminUser {
-    id: number;
-    name: string;
-    email: string;
+interface Admin {
+  id: number;
+  name: string;
+  email: string;
 }
 
-interface DashboardStatistics {
-    total_candidates: number;
-    total_recruiters: number;
-    total_companies: number;
-    total_jobs: number;
-    active_jobs: number;
-    inactive_jobs: number;
-    total_applications: number;
-    pending_verifications: number;
-    verified_companies: number;
+interface Statistics {
+  total_candidates: number;
+  total_recruiters: number;
+  total_companies: number;
+  total_jobs: number;
+  active_jobs: number;
+  inactive_jobs: number;
+  total_applications: number;
+  pending_verifications: number;
+  verified_companies: number;
 }
 
 interface DashboardResponse {
-    message: string;
-    admin: AdminUser;
-    statistics: DashboardStatistics;
+  message: string;
+  admin: Admin;
+  statistics: Statistics;
 }
 
-export default function AdminDashboardPage() {
-    const router = useRouter();
+export default function AdminDashboard() {
+  const router = useRouter();
 
-    const [admin, setAdmin] = useState<AdminUser | null>(null);
-    const [stats, setStats] = useState<DashboardStatistics | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState("");
+  const [admin, setAdmin] = useState<Admin | null>(null);
+  const [stats, setStats] = useState<Statistics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-    useEffect(() => {
-        async function loadDashboard() {
-            try {
-                const token = localStorage.getItem("access_token");
+  // Load admin information and dashboard statistics.
+  useEffect(() => {
+    let cancelled = false;
 
-                if (!token) {
-                    router.replace("/login");
-                    return;
-                }
+    const loadDashboard = async () => {
+      try {
+        setLoading(true);
+        setError("");
 
-                const user = await apiRequest<AdminUser & { role?: string }>(
-                    "/auth/me"
-                );
+        // Check whether the logged-in user is an admin.
+        const user = await apiRequest("/auth/me");
 
-                if (user.role !== "admin") {
-                    router.replace("/dashboard");
-                    return;
-                }
-
-                const data = await apiRequest<DashboardResponse>(
-                    "/admin/dashboard"
-                );
-
-                setAdmin(data.admin);
-                setStats(data.statistics);
-
-            } catch (err) {
-                console.error("Admin dashboard error:", err);
-
-                const status =
-                    err && typeof err === "object" && "status" in err
-                        ? (err as { status?: number }).status
-                        : undefined;
-
-                if (status === 401 || status === 403) {
-                    localStorage.removeItem("access_token");
-                    router.replace("/login");
-                    return;
-                }
-
-                setError(
-                    err instanceof Error
-                        ? err.message
-                        : "Unable to load admin dashboard."
-                );
-            } finally {
-                setLoading(false);
-            }
+        if (user.role !== "admin") {
+          router.replace("/login");
+          return;
         }
 
-        loadDashboard();
-    }, [router]);
-
-    function handleLogout() {
-        localStorage.removeItem("access_token");
-        router.replace("/login");
-    }
-
-    const statCards = [
-        {
-            title: "Total Candidates",
-            value: stats?.total_candidates ?? 0,
-            icon: "👥",
-            color: "blue",
-        },
-        {
-            title: "Total Recruiters",
-            value: stats?.total_recruiters ?? 0,
-            icon: "🧑‍💼",
-            color: "purple",
-        },
-        {
-            title: "Registered Companies",
-            value: stats?.total_companies ?? 0,
-            icon: "🏢",
-            color: "cyan",
-        },
-        {
-            title: "Total Jobs",
-            value: stats?.total_jobs ?? 0,
-            icon: "💼",
-            color: "indigo",
-        },
-        {
-            title: "Applications",
-            value: stats?.total_applications ?? 0,
-            icon: "📄",
-            color: "pink",
-        },
-        {
-            title: "Pending Verifications",
-            value: stats?.pending_verifications ?? 0,
-            icon: "⏳",
-            color: "yellow",
-        },
-    ];
-
-    if (loading) {
-        return (
-            <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
-                <div className="text-center">
-                    <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-blue-500" />
-                    <p className="text-slate-400">
-                        Loading admin dashboard...
-                    </p>
-                </div>
-            </main>
+        // Fetch dashboard statistics.
+        const response: DashboardResponse = await apiRequest(
+          "/admin/dashboard"
         );
-    }
 
-    if (error) {
-        return (
-            <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-6">
-                <div className="max-w-md rounded-2xl border border-red-500/20 bg-slate-900 p-8 text-center">
-                    <h2 className="mb-3 text-xl font-bold text-red-400">
-                        Dashboard Error
-                    </h2>
-                    <p className="text-slate-300">{error}</p>
-                    <button
-                        onClick={() => window.location.reload()}
-                        className="mt-6 rounded-lg bg-blue-600 px-5 py-2 hover:bg-blue-500"
-                    >
-                        Retry
-                    </button>
-                </div>
-            </main>
-        );
-    }
+        if (!cancelled) {
+          setAdmin(response.admin);
+          setStats(response.statistics);
+        }
+      } catch (err) {
+        console.error("Dashboard loading error:", err);
 
-    if (!stats || !admin) {
-        return null;
-    }
+        if (!cancelled) {
+          setError("Unable to load dashboard information.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
 
+    loadDashboard();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  // Logout admin.
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    router.replace("/login");
+  };
+
+  // Dashboard statistic cards.
+  const statisticCards = [
+    {
+      title: "Total Candidates",
+      value: stats?.total_candidates ?? 0,
+      icon: "👤",
+      color: "text-blue-400",
+    },
+    {
+      title: "Total Recruiters",
+      value: stats?.total_recruiters ?? 0,
+      icon: "💼",
+      color: "text-purple-400",
+    },
+    {
+      title: "Total Companies",
+      value: stats?.total_companies ?? 0,
+      icon: "🏢",
+      color: "text-cyan-400",
+    },
+    {
+      title: "Total Jobs",
+      value: stats?.total_jobs ?? 0,
+      icon: "📋",
+      color: "text-indigo-400",
+    },
+    {
+      title: "Total Applications",
+      value: stats?.total_applications ?? 0,
+      icon: "📨",
+      color: "text-pink-400",
+    },
+    {
+      title: "Pending Verifications",
+      value: stats?.pending_verifications ?? 0,
+      icon: "⏳",
+      color: "text-yellow-400",
+    },
+  ];
+
+  // Admin management navigation cards.
+  const managementCards = [
+    {
+      title: "Companies",
+      description: "View and manage registered companies.",
+      icon: "🏢",
+      route: "/admin/companies",
+      color: "border-cyan-500/30",
+    },
+    {
+      title: "Company Verification",
+      description: "Review company documents and verification requests.",
+      icon: "🛡️",
+      route: "/admin/company_verification",
+      color: "border-yellow-500/30",
+    },
+    {
+      title: "Recruiters",
+      description: "View recruiter accounts and company associations.",
+      icon: "💼",
+      route: "/admin/recruiters",
+      color: "border-purple-500/30",
+    },
+    {
+      title: "Candidates",
+      description: "View candidate accounts and profile information.",
+      icon: "👤",
+      route: "/admin/candidates",
+      color: "border-blue-500/30",
+    },
+    {
+      title: "Jobs Management",
+      description: "View all jobs posted on HireSwipe.",
+      icon: "📋",
+      route: "/admin/jobs",
+      color: "border-indigo-500/30",
+    },
+    {
+      title: "Applications",
+      description: "Monitor candidate applications across the platform.",
+      icon: "📨",
+      route: "/admin/applications",
+      color: "border-pink-500/30",
+    },
+  ];
+
+  if (loading) {
     return (
-        <main className="min-h-screen bg-slate-950 text-white">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        Loading admin dashboard...
+      </div>
+    );
+  }
 
-            {/* TOP NAVIGATION */}
-            <nav className="border-b border-slate-800 bg-slate-950">
-                <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
+  return (
+    <div className="min-h-screen bg-slate-950 text-white">
 
-                    <h1 className="text-2xl font-bold">
-                        <span className="text-blue-500">Hire</span>Swipe
-                        <span className="ml-3 rounded-md bg-blue-500/10 px-2 py-1 text-xs text-blue-400">
-                            PLATFORM ADMIN
-                        </span>
-                    </h1>
+      {/* Top navigation */}
+      <header className="bg-slate-900 border-b border-slate-800 px-5 md:px-8 py-5">
 
-                    <div className="flex items-center gap-5">
-                        <div className="hidden text-right sm:block">
-                            <p className="text-sm font-semibold">
-                                {admin.name}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                                {admin.email}
-                            </p>
-                        </div>
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
 
-                        <button
-                            onClick={handleLogout}
-                            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-red-500 hover:text-red-400"
-                        >
-                            Logout
-                        </button>
-                    </div>
+          <div>
+            <h1 className="text-2xl font-bold">
+              HireSwipe Admin
+            </h1>
+
+            <p className="text-sm text-slate-400 mt-1">
+              Platform Administration Dashboard
+            </p>
+          </div>
+
+          <button
+            onClick={handleLogout}
+            className="bg-red-600/10 border border-red-500/30 text-red-400 hover:bg-red-600 hover:text-white px-5 py-2 rounded-lg transition"
+          >
+            Logout
+          </button>
+
+        </div>
+
+      </header>
+
+      <main className="max-w-7xl mx-auto p-5 md:p-8">
+
+        {/* Admin welcome section */}
+        <div className="mb-8">
+
+          <h2 className="text-2xl font-semibold">
+            Welcome, {admin?.name || "Admin"}
+          </h2>
+
+          <p className="text-slate-400 mt-2">
+            Manage and monitor the HireSwipe recruitment platform.
+          </p>
+
+          {admin?.email && (
+            <p className="text-sm text-slate-500 mt-1">
+              {admin.email}
+            </p>
+          )}
+
+        </div>
+
+        {/* Error message */}
+        {error && (
+          <div className="bg-red-950/40 border border-red-800 text-red-300 rounded-xl p-4 mb-6">
+            {error}
+          </div>
+        )}
+
+        {/* Platform statistics */}
+        <section className="mb-10">
+
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-xl font-semibold">
+              Platform Overview
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+
+            {statisticCards.map((card) => (
+              <div
+                key={card.title}
+                className="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-slate-600 transition"
+              >
+
+                <div className="flex justify-between items-center">
+
+                  <div>
+                    <p className="text-sm text-slate-400">
+                      {card.title}
+                    </p>
+
+                    <p className={`text-3xl font-bold mt-3 ${card.color}`}>
+                      {card.value.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+
+                  <span className="text-3xl">
+                    {card.icon}
+                  </span>
+
                 </div>
-            </nav>
 
-            <div className="mx-auto max-w-7xl px-6 py-10">
+              </div>
+            ))}
 
-                {/* WELCOME SECTION */}
-                <section className="mb-10">
-                    <p className="mb-2 text-sm font-medium text-blue-400">
-                        PLATFORM OVERVIEW
-                    </p>
+          </div>
 
-                    <h2 className="text-3xl font-bold">
-                        Welcome back, {admin.name}
-                    </h2>
+        </section>
 
-                    <p className="mt-2 text-slate-400">
-                        Monitor and manage the HireSwipe recruitment platform.
-                    </p>
-                </section>
+        {/* Job statistics */}
+        <section className="mb-10">
 
-                {/* STATISTICS */}
-                <section>
-                    <div className="mb-5 flex items-center justify-between">
-                        <h3 className="text-xl font-semibold">
-                            Platform Statistics
-                        </h3>
-                        <span className="text-xs text-slate-500">
-                            Live data from backend
-                        </span>
-                    </div>
+          <h2 className="text-xl font-semibold mb-5">
+            Job Overview
+          </h2>
 
-                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                        {statCards.map((card) => (
-                            <div
-                                key={card.title}
-                                className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-blue-500/50"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <p className="text-sm text-slate-400">
-                                        {card.title}
-                                    </p>
-                                    <span className="text-2xl">
-                                        {card.icon}
-                                    </span>
-                                </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
 
-                                <p className="mt-5 text-3xl font-bold">
-                                    {card.value.toLocaleString()}
-                                </p>
-                            </div>
-                        ))}
-                    </div>
-                </section>
+            <div className="bg-slate-900 border border-green-500/20 rounded-xl p-5">
 
-                {/* JOB OVERVIEW */}
-                <section className="mt-10">
-                    <h3 className="mb-5 text-xl font-semibold">
-                        Job Overview
-                    </h3>
+              <p className="text-slate-400 text-sm">
+                Active Jobs
+              </p>
 
-                    <div className="grid gap-5 sm:grid-cols-2">
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-                            <p className="text-sm text-slate-400">
-                                Active Jobs
-                            </p>
-                            <p className="mt-3 text-3xl font-bold text-green-400">
-                                {stats.active_jobs}
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-                            <p className="text-sm text-slate-400">
-                                Inactive Jobs
-                            </p>
-                            <p className="mt-3 text-3xl font-bold text-slate-400">
-                                {stats.inactive_jobs}
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                {/* COMPANY VERIFICATION OVERVIEW */}
-                <section className="mt-10">
-                    <h3 className="mb-5 text-xl font-semibold">
-                        Company Verification
-                    </h3>
-
-                    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
-                        <div className="grid gap-6 sm:grid-cols-2">
-
-                            <div>
-                                <p className="text-sm text-slate-400">
-                                    Pending Reviews
-                                </p>
-                                <p className="mt-2 text-3xl font-bold text-yellow-400">
-                                    {stats.pending_verifications}
-                                </p>
-                            </div>
-
-                            <div>
-                                <p className="text-sm text-slate-400">
-                                    Verified Companies
-                                </p>
-                                <p className="mt-2 text-3xl font-bold text-green-400">
-                                    {stats.verified_companies}
-                                </p>
-                            </div>
-
-                        </div>
-
-                        <button
-                            onClick={() =>
-                                router.push("/admin/company_verification")
-                            }
-                            className="mt-7 rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold transition hover:bg-blue-500"
-                        >
-                            Manage Company Verifications →
-                        </button>
-
-                    </div>
-                </section>
+              <p className="text-3xl font-bold text-green-400 mt-3">
+                {stats?.active_jobs ?? 0}
+              </p>
 
             </div>
-        </main>
-    );
+
+            <div className="bg-slate-900 border border-slate-700 rounded-xl p-5">
+
+              <p className="text-slate-400 text-sm">
+                Inactive Jobs
+              </p>
+
+              <p className="text-3xl font-bold text-slate-300 mt-3">
+                {stats?.inactive_jobs ?? 0}
+              </p>
+
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* Company verification overview */}
+        <section className="mb-10">
+
+          <h2 className="text-xl font-semibold mb-5">
+            Company Verification Overview
+          </h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+
+            <div className="bg-slate-900 border border-yellow-500/20 rounded-xl p-5">
+
+              <p className="text-slate-400 text-sm">
+                Pending Verifications
+              </p>
+
+              <p className="text-3xl font-bold text-yellow-400 mt-3">
+                {stats?.pending_verifications ?? 0}
+              </p>
+
+            </div>
+
+            <div className="bg-slate-900 border border-green-500/20 rounded-xl p-5">
+
+              <p className="text-slate-400 text-sm">
+                Verified Companies
+              </p>
+
+              <p className="text-3xl font-bold text-green-400 mt-3">
+                {stats?.verified_companies ?? 0}
+              </p>
+
+            </div>
+
+          </div>
+
+          <button
+            onClick={() => router.push("/admin/company_verification")}
+            className="mt-5 bg-blue-600 hover:bg-blue-500 px-5 py-3 rounded-lg font-medium transition"
+          >
+            Manage Company Verifications →
+          </button>
+
+        </section>
+
+        {/* Management navigation */}
+        <section>
+
+          <h2 className="text-xl font-semibold mb-5">
+            Platform Management
+          </h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+
+            {managementCards.map((card) => (
+              <button
+                key={card.title}
+                onClick={() => router.push(card.route)}
+                className={`text-left bg-slate-900 border ${card.color} rounded-xl p-6 hover:bg-slate-800 hover:-translate-y-1 transition duration-200`}
+              >
+
+                <div className="flex items-center justify-between mb-4">
+
+                  <span className="text-3xl">
+                    {card.icon}
+                  </span>
+
+                  <span className="text-blue-400 text-xl">
+                    →
+                  </span>
+
+                </div>
+
+                <h3 className="text-lg font-semibold">
+                  {card.title}
+                </h3>
+
+                <p className="text-sm text-slate-400 mt-2 leading-6">
+                  {card.description}
+                </p>
+
+              </button>
+            ))}
+
+          </div>
+
+        </section>
+
+      </main>
+
+    </div>
+  );
 }
