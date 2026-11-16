@@ -9,3 +9,4 @@ from app.models.company_join_request import CompanyJoinRequest
 from app.models.pending_registration import PendingRegistration
 from app.models.login_challenge import LoginChallenge
 from app.models.phone_verification_challenge import PhoneVerificationChallenge
+from app.models.company_verification_request import CompanyVerificationRequest

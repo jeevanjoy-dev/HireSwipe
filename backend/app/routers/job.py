@@ -6,10 +6,18 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies.auth import get_current_user
+
 from app.models.job import Job
 from app.models.recruiter_profile import RecruiterProfile
+from app.models.company import Company
 from app.models.user import User
-from app.schemas.job import JobCreate, JobResponse, JobUpdate, JobListResponse
+
+from app.schemas.job import (
+    JobCreate,
+    JobResponse,
+    JobUpdate,
+    JobListResponse,
+)
 
 
 router = APIRouter(
@@ -19,29 +27,60 @@ router = APIRouter(
 
 
 # --------------------------------------------------
+# COMPANY ACCESS HELPER
+# --------------------------------------------------
+
+def get_verified_recruiter_company(
+    recruiter_profile: RecruiterProfile,
+    db: Session,
+) -> Company:
+    """Return the recruiter's company only if it is verified."""
+
+    if recruiter_profile.company_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be associated with a company to perform this action.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.id == recruiter_profile.company_id)
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Associated company not found.",
+        )
+
+    if company.verification_status != "verified":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Your company must have an approved verification "
+                "status to perform this action."
+            ),
+        )
+
+    return company
+
+
+# --------------------------------------------------
 # CREATE JOB
 # --------------------------------------------------
 
-@router.post("/", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_job(
     job_data: JobCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a new job for a recruiter associated with a company.
-
-    Args:
-        job_data: Information required to create the job.
-        db: Database session used to create the job.
-        current_user: Authenticated recruiter creating the job.
-
-    Returns:
-        Job: The newly created job.
-
-    Raises:
-        HTTPException: If the user is not a recruiter, does not have
-            a recruiter profile, or is not associated with a company.
-    """
+    """Create a job for a recruiter belonging to a verified company."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -49,7 +88,6 @@ def create_job(
             detail="Only recruiters can create jobs.",
         )
 
-    # Find the recruiter's profile.
     recruiter_profile = (
         db.query(RecruiterProfile)
         .filter(RecruiterProfile.user_id == current_user.id)
@@ -62,12 +100,10 @@ def create_job(
             detail="Recruiter profile not found.",
         )
 
-    # Prevent recruiters without a company association from creating jobs.
-    if recruiter_profile.company_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must be associated with a company to create a job.",
-        )
+    get_verified_recruiter_company(
+        recruiter_profile,
+        db,
+    )
 
     new_job = Job(
         recruiter_id=recruiter_profile.id,
@@ -104,7 +140,10 @@ def create_job(
 # GET MY JOBS
 # --------------------------------------------------
 
-@router.get("/my-jobs", response_model=list[JobResponse])
+@router.get(
+    "/my-jobs",
+    response_model=list[JobResponse],
+)
 def get_my_jobs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -143,7 +182,10 @@ def get_my_jobs(
 # SEARCH AND FILTER JOBS
 # --------------------------------------------------
 
-@router.get("/", response_model=JobListResponse)
+@router.get(
+    "/",
+    response_model=JobListResponse,
+)
 def get_jobs(
     keyword: str | None = Query(default=None),
     location: str | None = Query(default=None),
@@ -159,7 +201,7 @@ def get_jobs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Search and filter active jobs for authenticated candidates."""
+    """Search active jobs belonging to verified companies."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -174,10 +216,27 @@ def get_jobs(
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Minimum experience cannot be greater than maximum experience.",
+            detail=(
+                "Minimum experience cannot be greater "
+                "than maximum experience."
+            ),
         )
 
-    query = db.query(Job).filter(Job.is_active.is_(True))
+    query = (
+        db.query(Job)
+        .join(
+            RecruiterProfile,
+            Job.recruiter_id == RecruiterProfile.id,
+        )
+        .join(
+            Company,
+            RecruiterProfile.company_id == Company.id,
+        )
+        .filter(
+            Job.is_active.is_(True),
+            Company.verification_status == "verified",
+        )
+    )
 
     if keyword:
         search_term = f"%{keyword}%"
@@ -232,19 +291,31 @@ def get_jobs(
 # GET JOB DETAILS
 # --------------------------------------------------
 
-@router.get("/{job_id}", response_model=JobResponse)
+@router.get(
+    "/{job_id}",
+    response_model=JobResponse,
+)
 def get_job(
     job_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get an active job by its ID."""
+    """Get a job only when it is active and its company is verified."""
 
     job = (
         db.query(Job)
+        .join(
+            RecruiterProfile,
+            Job.recruiter_id == RecruiterProfile.id,
+        )
+        .join(
+            Company,
+            RecruiterProfile.company_id == Company.id,
+        )
         .filter(
             Job.id == job_id,
             Job.is_active.is_(True),
+            Company.verification_status == "verified",
         )
         .first()
     )
@@ -262,14 +333,17 @@ def get_job(
 # UPDATE JOB
 # --------------------------------------------------
 
-@router.put("/{job_id}", response_model=JobResponse)
+@router.put(
+    "/{job_id}",
+    response_model=JobResponse,
+)
 def update_job(
     job_id: int,
     job_data: JobUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Update a job owned by the authenticated recruiter."""
+    """Update a job owned by a recruiter belonging to a verified company."""
 
     if current_user.role != "recruiter":
         raise HTTPException(
@@ -288,6 +362,11 @@ def update_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Recruiter profile not found.",
         )
+
+    get_verified_recruiter_company(
+        recruiter_profile,
+        db,
+    )
 
     job = (
         db.query(Job)
@@ -309,10 +388,22 @@ def update_job(
 
     update_data = job_data.model_dump(exclude_unset=True)
 
-    new_salary_min = update_data.get("salary_min", job.salary_min)
-    new_salary_max = update_data.get("salary_max", job.salary_max)
-    new_experience_min = update_data.get("experience_min", job.experience_min)
-    new_experience_max = update_data.get("experience_max", job.experience_max)
+    new_salary_min = update_data.get(
+        "salary_min",
+        job.salary_min,
+    )
+    new_salary_max = update_data.get(
+        "salary_max",
+        job.salary_max,
+    )
+    new_experience_min = update_data.get(
+        "experience_min",
+        job.experience_min,
+    )
+    new_experience_max = update_data.get(
+        "experience_max",
+        job.experience_max,
+    )
 
     if (
         new_experience_min is not None
@@ -321,7 +412,10 @@ def update_job(
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Minimum experience cannot be greater than maximum experience.",
+            detail=(
+                "Minimum experience cannot be greater "
+                "than maximum experience."
+            ),
         )
 
     if (
@@ -331,7 +425,10 @@ def update_job(
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Minimum salary cannot be greater than maximum salary.",
+            detail=(
+                "Minimum salary cannot be greater "
+                "than maximum salary."
+            ),
         )
 
     for field, value in update_data.items():
@@ -347,7 +444,10 @@ def update_job(
 # DELETE JOB
 # --------------------------------------------------
 
-@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 def delete_job(
     job_id: int,
     db: Session = Depends(get_db),

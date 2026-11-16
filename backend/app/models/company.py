@@ -154,3 +154,9 @@ class Company(Base):
         "RecruiterProfile",
         back_populates="company"
     )
+
+    verification_requests = relationship(
+    "CompanyVerificationRequest",
+    back_populates="company",
+    cascade="all, delete-orphan",
+)

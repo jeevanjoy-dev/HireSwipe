@@ -1,11 +1,8 @@
+
 from datetime import datetime
-
 import mimetypes
-
 import re
-
 from urllib.parse import urlsplit
-
 
 from fastapi import (
     APIRouter,
@@ -15,20 +12,17 @@ from fastapi import (
     UploadFile,
     File,
 )
-
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-
 
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 
-
 from app.models.company import Company
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.company_join_request import CompanyJoinRequest
+from app.models.company_verification_request import CompanyVerificationRequest
 from app.models.user import User
-
 
 from app.services.file_storage import (
     save_upload,
@@ -37,7 +31,6 @@ from app.services.file_storage import (
     ALLOWED_PHOTO_EXTENSIONS,
     MAX_PHOTO_SIZE,
 )
-
 
 from app.services.otp_service import (
     generate_otp,
@@ -48,9 +41,7 @@ from app.services.otp_service import (
     can_resend_otp,
 )
 
-
 from app.services.email_service import send_otp_email
-
 
 from app.schemas.company import (
     CompanyCreate,
@@ -60,14 +51,12 @@ from app.schemas.company import (
     CompanyBusinessEmailOTPVerifyRequest,
 )
 
-
 from app.schemas.company_join_request import (
     CompanyJoinRequestCreate,
     CompanyJoinRequestReview,
     CompanyJoinRequestResponse,
     CompanyJoinRequestAdminResponse,
 )
-
 
 from app.schemas.recruiter import (
     CompanyRecruiterResponse,
@@ -79,6 +68,21 @@ router = APIRouter(
     prefix="/companies",
     tags=["Company"],
 )
+
+
+# --------------------------------------------------
+# COMPANY VERIFICATION SETTINGS
+# --------------------------------------------------
+
+ALLOWED_COMPANY_DOCUMENT_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".jpg",
+    ".jpeg",
+    ".png",
+}
+
+MAX_COMPANY_DOCUMENT_SIZE = 5 * 1024 * 1024
 
 
 # --------------------------------------------------
@@ -119,6 +123,321 @@ def check_company_access(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this company.",
+        )
+
+    return company
+
+
+# --------------------------------------------------
+# COMPANY VERIFICATION REQUEST HELPERS
+# --------------------------------------------------
+
+def get_latest_verification_request(
+    company_id: int,
+    db: Session,
+    lock: bool = False,
+):
+    """Return the latest verification request for a company."""
+
+    query = (
+        db.query(CompanyVerificationRequest)
+        .filter(
+            CompanyVerificationRequest.company_id == company_id
+        )
+        .order_by(
+            CompanyVerificationRequest.version_number.desc()
+        )
+    )
+
+    if lock:
+        query = query.with_for_update()
+
+    return query.first()
+
+
+def preserve_legacy_verification_documents(
+    company: Company,
+    db: Session,
+):
+    """
+    Preserve older verification documents stored directly on Company.
+
+    Creates a version 1 historical request when a company has legacy
+    verification data but no CompanyVerificationRequest records.
+    """
+
+    existing_request = get_latest_verification_request(
+        company.id,
+        db,
+    )
+
+    if existing_request:
+        return existing_request
+
+    has_legacy_data = bool(
+        company.document_1
+        or company.document_2
+        or company.verification_status in {
+            "verified",
+            "pending_review",
+            "pending",
+            "rejected",
+            "inactive",
+        }
+    )
+
+    if not has_legacy_data:
+        return None
+
+    if company.verification_status == "verified":
+        legacy_status = "approved"
+
+    elif company.verification_status in {
+        "pending_review",
+        "pending",
+    }:
+        legacy_status = "pending"
+
+    elif company.verification_status in {
+        "rejected",
+        "inactive",
+    }:
+        legacy_status = "rejected"
+
+    else:
+        legacy_status = "draft"
+
+    legacy_request = CompanyVerificationRequest(
+        company_id=company.id,
+        request_type="initial",
+        version_number=1,
+        document_1=company.document_1,
+        document_2=company.document_2,
+        status=legacy_status,
+        submitted_at=(
+            company.business_email_verified_at
+            if legacy_status in {"approved", "pending"}
+            else None
+        ),
+    )
+
+    db.add(legacy_request)
+    db.flush()
+
+    return legacy_request
+
+
+def get_next_verification_version(
+    company_id: int,
+    db: Session,
+) -> int:
+    """Calculate the next verification request version."""
+
+    latest_request = get_latest_verification_request(
+        company_id,
+        db,
+    )
+
+    if not latest_request:
+        return 1
+
+    return latest_request.version_number + 1
+
+
+def has_previously_approved_verification(
+    company_id: int,
+    db: Session,
+) -> bool:
+    """Check whether this company has ever passed verification."""
+
+    return (
+        db.query(CompanyVerificationRequest.id)
+        .filter(
+            CompanyVerificationRequest.company_id == company_id,
+            CompanyVerificationRequest.status == "approved",
+        )
+        .first()
+        is not None
+    )
+
+
+def get_or_create_draft_request(
+    company: Company,
+    db: Session,
+):
+    """
+    Return an editable verification draft.
+
+    First-time companies can automatically create their initial draft.
+
+    Companies with an approved or rejected request must explicitly create
+    a new verification request before uploading replacement documents.
+
+    Pending requests cannot be modified.
+    """
+
+    preserve_legacy_verification_documents(
+        company,
+        db,
+    )
+
+    latest_request = get_latest_verification_request(
+        company.id,
+        db,
+        lock=True,
+    )
+
+    if latest_request:
+
+        if latest_request.status in {
+            "pending",
+            "pending_review",
+        }:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Your verification request is pending review. "
+                    "Documents cannot be changed."
+                ),
+            )
+
+        if latest_request.status == "draft":
+            return latest_request
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Please create a new verification request before "
+                "uploading documents."
+            ),
+        )
+
+    # Only a company with no previous request can automatically
+    # create its first initial draft.
+    new_request = CompanyVerificationRequest(
+        company_id=company.id,
+        request_type="initial",
+        version_number=1,
+        status="draft",
+    )
+
+    db.add(new_request)
+    db.flush()
+
+    return new_request
+
+
+
+def validate_company_verification_requirements(
+    company: Company,
+    verification_request: CompanyVerificationRequest,
+):
+    """Validate all requirements before submitting a request."""
+
+    if not verification_request.document_1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please upload the first company verification document.",
+        )
+
+    if not verification_request.document_2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please upload the second company verification document.",
+        )
+
+    if not verification_request.business_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Business email is required for this verification request.",
+        )
+
+    if not verification_request.business_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verify the business email for this verification request.",
+        )
+
+    if (
+        company.business_email
+        and company.business_email.lower()
+        != verification_request.business_email.lower()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The verified business email does not match the company's current business email.",
+        )
+
+    if not company.business_phone or not company.business_phone.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Company business phone number is required.",
+        )
+
+    if not company.business_address or not company.business_address.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Company business address is required.",
+        )
+
+    validate_company_email_domain(
+        verification_request.business_email,
+        company.website,
+    )
+
+
+def update_company_document_status(
+    company: Company,
+    verification_request: CompanyVerificationRequest | None,
+):
+    """
+    Update document progress for the latest request.
+
+    This function deliberately does not change verification_status.
+    Uploading documents must not activate, deactivate, or overwrite
+    the company's existing verification state.
+    """
+
+    if not verification_request:
+        company.documents_status = "not_submitted"
+        return
+
+    has_first = bool(verification_request.document_1)
+    has_second = bool(verification_request.document_2)
+
+    if has_first and has_second:
+        company.documents_status = "submitted"
+
+    elif has_first or has_second:
+        company.documents_status = "in_progress"
+
+    else:
+        company.documents_status = "not_submitted"
+
+
+def ensure_company_admin(
+    current_user,
+    db: Session,
+):
+    """Return the company administered by the current recruiter."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only company admins can access this endpoint.",
+        )
+
+    company = (
+        db.query(Company)
+        .filter(Company.admin_user_id == current_user.id)
+        .with_for_update()
+        .first()
+    )
+
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="You do not administer a company.",
         )
 
     return company
@@ -168,7 +487,7 @@ def validate_company_email_domain(
     """Require the business email domain to match the company website."""
 
     if not re.fullmatch(
-        r"^[^@\s]+@[^@\s]+\.[^@\s]+",
+        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
         business_email,
     ):
         raise HTTPException(
@@ -187,57 +506,21 @@ def validate_company_email_domain(
     if not website:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Add your company website before verifying your business email.",
+            detail=(
+                "Add your company website before verifying "
+                "your business email."
+            ),
         )
 
     if email_domain != get_website_domain(website):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Your business email domain must match your company website domain.",
+            detail=(
+                "Your business email domain must match "
+                "your company website domain."
+            ),
         )
 
-
-# --------------------------------------------------
-# COMPANY VERIFICATION DOCUMENT SETTINGS
-# --------------------------------------------------
-
-ALLOWED_COMPANY_DOCUMENT_EXTENSIONS = {
-    ".pdf",
-    ".docx",
-    ".jpg",
-    ".jpeg",
-    ".png",
-}
-
-MAX_COMPANY_DOCUMENT_SIZE = 5 * 1024 * 1024  # 5 MB per document
-
-
-def update_company_document_status(company: Company) -> None:
-    has_first = bool(company.document_1)
-    has_second = bool(company.document_2)
-
-    has_business_details = (
-        bool(company.business_phone)
-        and bool(company.business_phone.strip())
-        and bool(company.business_address)
-        and bool(company.business_address.strip())
-    )
-
-    if has_first and has_second:
-        company.documents_status = "submitted"
-
-        if company.business_email_verified and has_business_details:
-            company.verification_status = "pending_review"
-        else:
-            company.verification_status = "unverified"
-
-    elif has_first or has_second:
-        company.documents_status = "in_progress"
-        company.verification_status = "unverified"
-
-    else:
-        company.documents_status = "not_submitted"
-        company.verification_status = "unverified"
 
 # --------------------------------------------------
 # CREATE COMPANY
@@ -356,30 +639,268 @@ def get_my_admin_company(
 ):
     """Return the company administered by the current recruiter."""
 
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only recruiters can access this endpoint.",
-        )
+    return ensure_company_admin(current_user, db)
 
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .first()
+
+# --------------------------------------------------
+# GET COMPANY VERIFICATION STATUS
+# --------------------------------------------------
+
+@router.get("/my-admin-company/verification")
+def get_my_company_verification_status(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return the current company status and latest verification request."""
+
+    company = ensure_company_admin(current_user, db)
+
+    latest_request = preserve_legacy_verification_documents(
+        company,
+        db,
     )
 
-    if not company:
+    if latest_request:
+        db.commit()
+        db.refresh(latest_request)
+
+    return {
+        "company_id": company.id,
+        "verification_status": company.verification_status,
+        "documents_status": company.documents_status,
+        "business_email": company.business_email,
+        "business_email_verified": (
+            latest_request.business_email_verified
+            if latest_request
+            else False
+        ),
+        "business_email_verified_at": (
+            latest_request.business_email_verified_at
+            if latest_request
+            else None
+        ),
+        "business_phone": company.business_phone,
+        "business_address": company.business_address,
+        "approved_documents": {
+            "document_1_uploaded": bool(company.document_1),
+            "document_2_uploaded": bool(company.document_2),
+        },
+        "latest_request": (
+            {
+                "id": latest_request.id,
+                "request_type": latest_request.request_type,
+                "version_number": latest_request.version_number,
+                "status": latest_request.status,
+                "business_email": latest_request.business_email,
+                "business_email_verified": latest_request.business_email_verified,
+                "document_1_uploaded": bool(latest_request.document_1),
+                "document_2_uploaded": bool(latest_request.document_2),
+                "submitted_at": latest_request.submitted_at,
+                "reviewed_at": latest_request.reviewed_at,
+                "rejection_reason": latest_request.rejection_reason,
+            }
+            if latest_request
+            else None
+        ),
+    }
+
+
+# --------------------------------------------------
+# REQUEST NEW VERIFICATION / RE-VERIFICATION
+# --------------------------------------------------
+
+
+@router.post("/my-admin-company/verification/request")
+def request_new_company_verification(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Create a new initial verification or re-verification request."""
+
+    company = ensure_company_admin(current_user, db)
+
+    preserve_legacy_verification_documents(company, db)
+
+    latest_request = get_latest_verification_request(
+        company.id,
+        db,
+        lock=True,
+    )
+
+    if latest_request and latest_request.status in {
+        "pending",
+        "pending_review",
+    }:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A verification request is already pending review.",
         )
 
-    return company
+    # Reuse an existing draft without resetting its OTP state.
+    if latest_request and latest_request.status == "draft":
+        return {
+            "message": "You already have an editable verification request.",
+            "request_id": latest_request.id,
+            "request_type": latest_request.request_type,
+            "version_number": latest_request.version_number,
+            "request_status": latest_request.status,
+            "business_email_verified": latest_request.business_email_verified,
+        }
+
+    previously_approved = has_previously_approved_verification(
+        company.id,
+        db,
+    )
+
+    request_type = "updated" if previously_approved else "initial"
+
+    next_version = (
+        latest_request.version_number + 1
+        if latest_request
+        else 1
+    )
+
+    new_request = CompanyVerificationRequest(
+        company_id=company.id,
+        request_type=request_type,
+        version_number=next_version,
+        status="draft",
+        document_1=None,
+        document_2=None,
+        business_email=company.business_email,
+        business_email_verified=False,
+        business_email_verified_at=None,
+        business_email_otp_hash=None,
+        business_email_otp_expires_at=None,
+        business_email_otp_attempts=0,
+        business_email_otp_last_sent_at=None,
+    )
+
+    # Keep legacy company-level verification fields synchronized.
+    # Actual submission validation uses the request-level fields.
+    company.business_email_verified = False
+    company.business_email_verified_at = None
+    company.business_email_otp_hash = None
+    company.business_email_otp_expires_at = None
+    company.business_email_otp_attempts = 0
+    company.business_email_otp_last_sent_at = None
+
+    db.add(new_request)
+
+    try:
+        db.commit()
+        db.refresh(new_request)
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "New verification request created successfully.",
+        "request_id": new_request.id,
+        "request_type": new_request.request_type,
+        "version_number": new_request.version_number,
+        "request_status": new_request.status,
+        "business_email_verified": False,
+    }
+
+
+# --------------------------------------------------
+# SUBMIT COMPANY VERIFICATION REQUEST
+# --------------------------------------------------
+
+@router.post("/my-admin-company/verification/submit")
+def submit_company_verification_request(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Submit the latest draft for platform admin review."""
+
+    company = ensure_company_admin(
+        current_user,
+        db,
+    )
+
+    preserve_legacy_verification_documents(
+        company,
+        db,
+    )
+
+    verification_request = get_latest_verification_request(
+        company.id,
+        db,
+        lock=True,
+    )
+
+    if not verification_request:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please create a verification request first.",
+        )
+
+    if verification_request.status in {
+        "pending",
+        "pending_review",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This verification request has already been submitted.",
+        )
+
+    if verification_request.status != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Only a draft verification request can be submitted. "
+                "Create a new request first."
+            ),
+        )
+
+    validate_company_verification_requirements(
+        company,
+        verification_request,
+    )
+
+    verification_request.status = "pending"
+    verification_request.submitted_at = datetime.utcnow()
+
+    company.documents_status = "submitted"
+
+    # Preserve the previous company state during re-verification.
+    # A previously verified company remains verified while pending.
+    # A previously inactive company remains inactive while pending.
+    # An initially unverified company moves to pending_review.
+    if (
+        verification_request.request_type == "initial"
+        and company.verification_status == "unverified"
+    ):
+        company.verification_status = "pending_review"
+
+    try:
+        db.commit()
+        db.refresh(verification_request)
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Company verification request submitted successfully.",
+        "request_id": verification_request.id,
+        "request_type": verification_request.request_type,
+        "version_number": verification_request.version_number,
+        "request_status": verification_request.status,
+        "verification_status": company.verification_status,
+        "documents_status": company.documents_status,
+    }
 
 
 # --------------------------------------------------
 # SEND COMPANY BUSINESS EMAIL OTP
 # --------------------------------------------------
+
 
 @router.post("/my-admin-company/business-email/send-otp")
 def send_company_business_email_otp(
@@ -387,24 +908,20 @@ def send_company_business_email_otp(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Send a HireSwipe-generated OTP to the company's official email."""
+    """Send an OTP for the latest draft verification request."""
 
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can verify business emails.",
-        )
+    company = ensure_company_admin(current_user, db)
 
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .first()
+    verification_request = get_latest_verification_request(
+        company.id,
+        db,
+        lock=True,
     )
 
-    if not company:
+    if not verification_request or verification_request.status != "draft":
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Create a new verification request before verifying your business email.",
         )
 
     business_email = request_data.business_email.strip().lower()
@@ -413,14 +930,6 @@ def send_company_business_email_otp(
         business_email,
         company.website,
     )
-
-    if (
-        company.business_email == business_email
-        and company.business_email_verified
-    ):
-        return {
-            "message": "This company email is already verified."
-        }
 
     duplicate = (
         db.query(Company)
@@ -437,7 +946,19 @@ def send_company_business_email_otp(
             detail="This business email is already associated with another company.",
         )
 
-    if not can_resend_otp(company.business_email_otp_last_sent_at):
+    if (
+        verification_request.business_email == business_email
+        and verification_request.business_email_verified
+    ):
+        return {
+            "message": "This business email is already verified for this request.",
+            "business_email": business_email,
+            "business_email_verified": True,
+        }
+
+    if not can_resend_otp(
+        verification_request.business_email_otp_last_sent_at
+    ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Please wait before requesting another OTP.",
@@ -445,16 +966,18 @@ def send_company_business_email_otp(
 
     otp = generate_otp()
 
-    if company.business_email != business_email:
-        company.business_email_verified = False
-        company.business_email_verified_at = None
-        company.verification_status = "unverified"
+    verification_request.business_email = business_email
+    verification_request.business_email_verified = False
+    verification_request.business_email_verified_at = None
+    verification_request.business_email_otp_hash = hash_otp(otp)
+    verification_request.business_email_otp_expires_at = get_otp_expiry()
+    verification_request.business_email_otp_attempts = 0
+    verification_request.business_email_otp_last_sent_at = datetime.utcnow()
 
+    # Keep the company's current contact email synchronized.
     company.business_email = business_email
-    company.business_email_otp_hash = hash_otp(otp)
-    company.business_email_otp_expires_at = get_otp_expiry()
-    company.business_email_otp_attempts = 0
-    company.business_email_otp_last_sent_at = datetime.utcnow()
+    company.business_email_verified = False
+    company.business_email_verified_at = None
 
     try:
         send_otp_email(
@@ -476,6 +999,8 @@ def send_company_business_email_otp(
     return {
         "message": "Company verification OTP sent successfully.",
         "business_email": business_email,
+        "business_email_verified": False,
+        "request_id": verification_request.id,
     }
 
 
@@ -483,51 +1008,51 @@ def send_company_business_email_otp(
 # VERIFY COMPANY BUSINESS EMAIL OTP
 # --------------------------------------------------
 
+
 @router.post("/my-admin-company/business-email/verify-otp")
 def verify_company_business_email_otp(
     request_data: CompanyBusinessEmailOTPVerifyRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Verify the OTP sent to the company's official business email."""
+    """Verify the OTP for the latest draft verification request."""
 
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can verify business emails.",
-        )
+    company = ensure_company_admin(current_user, db)
 
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .with_for_update()
-        .first()
+    verification_request = get_latest_verification_request(
+        company.id,
+        db,
+        lock=True,
     )
 
-    if not company:
+    if not verification_request or verification_request.status != "draft":
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Create a new verification request before verifying your business email.",
         )
 
-    if company.business_email_verified:
+    if verification_request.business_email_verified:
         return {
-            "message": "Company business email is already verified."
+            "message": "Company business email is already verified for this request.",
+            "business_email": verification_request.business_email,
+            "business_email_verified": True,
+            "request_id": verification_request.id,
         }
 
     if (
-        not company.business_email_otp_hash
-        or not company.business_email_otp_expires_at
+        not verification_request.business_email
+        or not verification_request.business_email_otp_hash
+        or not verification_request.business_email_otp_expires_at
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Please request a company verification OTP first.",
         )
 
-    if datetime.utcnow() > company.business_email_otp_expires_at:
-        company.business_email_otp_hash = None
-        company.business_email_otp_expires_at = None
-        company.business_email_otp_attempts = 0
+    if datetime.utcnow() > verification_request.business_email_otp_expires_at:
+        verification_request.business_email_otp_hash = None
+        verification_request.business_email_otp_expires_at = None
+        verification_request.business_email_otp_attempts = 0
 
         db.commit()
 
@@ -536,7 +1061,10 @@ def verify_company_business_email_otp(
             detail="OTP has expired. Please request a new OTP.",
         )
 
-    if company.business_email_otp_attempts >= MAX_OTP_ATTEMPTS:
+    if (
+        verification_request.business_email_otp_attempts
+        >= MAX_OTP_ATTEMPTS
+    ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Maximum OTP attempts exceeded. Request a new OTP.",
@@ -544,9 +1072,9 @@ def verify_company_business_email_otp(
 
     if not verify_otp(
         request_data.otp,
-        company.business_email_otp_hash,
+        verification_request.business_email_otp_hash,
     ):
-        company.business_email_otp_attempts += 1
+        verification_request.business_email_otp_attempts += 1
         db.commit()
 
         raise HTTPException(
@@ -554,26 +1082,31 @@ def verify_company_business_email_otp(
             detail="Invalid OTP.",
         )
 
+    verification_request.business_email_verified = True
+    verification_request.business_email_verified_at = datetime.utcnow()
+    verification_request.business_email_otp_hash = None
+    verification_request.business_email_otp_expires_at = None
+    verification_request.business_email_otp_attempts = 0
+
+    # Maintain the legacy company-level status for compatibility.
     company.business_email_verified = True
     company.business_email_verified_at = datetime.utcnow()
-    company.business_email_otp_hash = None
-    company.business_email_otp_expires_at = None
-    company.business_email_otp_attempts = 0
-
-    update_company_document_status(company)
 
     db.commit()
+
+    db.refresh(verification_request)
     db.refresh(company)
 
     return {
         "message": "Company business email verified successfully.",
-        "business_email": company.business_email,
+        "business_email": verification_request.business_email,
         "business_email_verified": True,
+        "request_id": verification_request.id,
     }
 
 
 # --------------------------------------------------
-# UPLOAD / REPLACE COMPANY VERIFICATION DOCUMENTS
+# UPLOAD COMPANY VERIFICATION DOCUMENT
 # --------------------------------------------------
 
 @router.post("/my-admin-company/documents/{document_number}")
@@ -583,13 +1116,7 @@ async def upload_company_verification_document(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Upload or replace one of the two required company documents."""
-
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can upload verification documents.",
-        )
+    """Upload a document to the current editable draft request."""
 
     if document_number not in (1, 2):
         raise HTTPException(
@@ -597,21 +1124,17 @@ async def upload_company_verification_document(
             detail="Document number must be 1 or 2.",
         )
 
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .with_for_update()
-        .first()
+    company = ensure_company_admin(
+        current_user,
+        db,
     )
 
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
-        )
+    verification_request = get_or_create_draft_request(
+        company,
+        db,
+    )
 
     field_name = f"document_{document_number}"
-    old_key = getattr(company, field_name)
     new_key = None
 
     try:
@@ -622,10 +1145,19 @@ async def upload_company_verification_document(
             max_size=MAX_COMPANY_DOCUMENT_SIZE,
         )
 
-        setattr(company, field_name, new_key)
-        update_company_document_status(company)
+        setattr(
+            verification_request,
+            field_name,
+            new_key,
+        )
+
+        update_company_document_status(
+            company,
+            verification_request,
+        )
 
         db.commit()
+        db.refresh(verification_request)
         db.refresh(company)
 
     except Exception:
@@ -639,12 +1171,19 @@ async def upload_company_verification_document(
     finally:
         await file.close()
 
-    if old_key:
-        delete_stored_file(old_key)
+    # Do not delete the previous stored file here.
+    # Historical verification requests must retain their documents.
 
     return {
-        "message": f"Company verification document {document_number} uploaded successfully.",
+        "message": (
+            f"Company verification document {document_number} "
+            "uploaded successfully."
+        ),
         "document_number": document_number,
+        "request_id": verification_request.id,
+        "request_type": verification_request.request_type,
+        "version_number": verification_request.version_number,
+        "request_status": verification_request.status,
         "documents_status": company.documents_status,
         "verification_status": company.verification_status,
     }
@@ -660,13 +1199,7 @@ def get_company_verification_document(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Allow the company admin to view a submitted document."""
-
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can access verification documents.",
-        )
+    """View the latest request's document or the current approved document."""
 
     if document_number not in (1, 2):
         raise HTTPException(
@@ -674,28 +1207,42 @@ def get_company_verification_document(
             detail="Document number must be 1 or 2.",
         )
 
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .first()
+    company = ensure_company_admin(
+        current_user,
+        db,
     )
 
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
+    latest_request = preserve_legacy_verification_documents(
+        company,
+        db,
+    )
+
+    storage_key = None
+
+    if latest_request:
+        storage_key = getattr(
+            latest_request,
+            f"document_{document_number}",
         )
 
-    storage_key = getattr(
-        company,
-        f"document_{document_number}",
-    )
+    # If the latest request does not contain this document,
+    # fall back to the company's current approved document.
+    if not storage_key:
+        storage_key = getattr(
+            company,
+            f"document_{document_number}",
+        )
 
     if not storage_key:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Company verification document {document_number} not found.",
+            detail=(
+                f"Company verification document "
+                f"{document_number} not found."
+            ),
         )
+
+    db.commit()
 
     file_path = get_stored_file(storage_key)
 
@@ -712,67 +1259,6 @@ def get_company_verification_document(
 
 
 # --------------------------------------------------
-# DELETE COMPANY VERIFICATION DOCUMENT
-# --------------------------------------------------
-
-@router.delete("/my-admin-company/documents/{document_number}")
-def delete_company_verification_document(
-    document_number: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    """Allow the company admin to remove a submitted document."""
-
-    if current_user.role != "recruiter":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only company admins can delete verification documents.",
-        )
-
-    if document_number not in (1, 2):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Document number must be 1 or 2.",
-        )
-
-    company = (
-        db.query(Company)
-        .filter(Company.admin_user_id == current_user.id)
-        .with_for_update()
-        .first()
-    )
-
-    if not company:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="You do not administer a company.",
-        )
-
-    field_name = f"document_{document_number}"
-    old_key = getattr(company, field_name)
-
-    if not old_key:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Company verification document {document_number} not found.",
-        )
-
-    setattr(company, field_name, None)
-    update_company_document_status(company)
-
-    db.commit()
-    db.refresh(company)
-
-    delete_stored_file(old_key)
-
-    return {
-        "message": f"Company verification document {document_number} deleted successfully.",
-        "documents_status": company.documents_status,
-        "verification_status": company.verification_status,
-    }
-
-
-# --------------------------------------------------
 # UPLOAD / REPLACE COMPANY ADMIN PROFILE PHOTO
 # --------------------------------------------------
 
@@ -785,6 +1271,8 @@ async def upload_company_admin_photo(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """Upload or replace the company admin's profile photo."""
+
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -845,6 +1333,8 @@ def get_company_admin_photo(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """Return the company admin's profile photo."""
+
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -880,6 +1370,8 @@ def delete_company_admin_photo(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    """Delete the company admin's profile photo."""
+
     if current_user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -957,6 +1449,7 @@ def update_company(
     company = (
         db.query(Company)
         .filter(Company.id == company_id)
+        .with_for_update()
         .first()
     )
 
@@ -970,6 +1463,23 @@ def update_company(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the company admin can edit company details.",
+        )
+
+    latest_request = get_latest_verification_request(
+        company.id,
+        db,
+    )
+
+    if latest_request and latest_request.status in {
+        "pending",
+        "pending_review",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Company details cannot be changed while a verification "
+                "request is pending review."
+            ),
         )
 
     old_website_domain = (
@@ -991,7 +1501,6 @@ def update_company(
     company.business_phone = company_data.business_phone
     company.business_address = company_data.business_address
 
-    # Reset verification if the company's website domain changes.
     if old_website_domain != new_website_domain:
         company.business_email_verified = False
         company.business_email_verified_at = None
@@ -999,7 +1508,6 @@ def update_company(
         company.business_email_otp_expires_at = None
         company.business_email_otp_attempts = 0
         company.business_email_otp_last_sent_at = None
-        company.verification_status = "unverified"
 
     db.commit()
     db.refresh(company)
@@ -1162,7 +1670,7 @@ def get_company_join_requests(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Return only pending join requests with recruiter details."""
+    """Return pending join requests with recruiter details."""
 
     company = (
         db.query(Company)
@@ -1274,7 +1782,9 @@ def review_join_request(
     if review_data.status == "approved":
         existing_admin_company = (
             db.query(Company)
-            .filter(Company.admin_user_id == join_request.recruiter_id)
+            .filter(
+                Company.admin_user_id == join_request.recruiter_id
+            )
             .first()
         )
 
@@ -1472,9 +1982,7 @@ def update_company_recruiter(
 # REMOVE SECONDARY RECRUITER FROM COMPANY
 # --------------------------------------------------
 
-@router.delete(
-    "/{company_id}/recruiters/{user_id}",
-)
+@router.delete("/{company_id}/recruiters/{user_id}")
 def remove_company_recruiter(
     company_id: int,
     user_id: int,
