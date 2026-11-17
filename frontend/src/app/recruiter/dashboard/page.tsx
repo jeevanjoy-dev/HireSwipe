@@ -22,6 +22,7 @@ interface Company {
     description: string | null;
     location: string | null;
     website: string | null;
+    verification_status: string;
 }
 
 interface RecruiterProfile {
@@ -402,6 +403,10 @@ export default function RecruiterDashboardPage() {
 
     const company = recruiterAccess.company;
     const profile = recruiterAccess.profile;
+
+    // Job posting is available only after the associated company is verified.
+    const companyVerified =
+        company?.verification_status === "verified";
 
     // --------------------------------------------------
     // DASHBOARD UI
@@ -811,10 +816,22 @@ export default function RecruiterDashboardPage() {
                             {/* POST A JOB */}
 
                             <button
-                                onClick={() =>
-                                    router.push("/recruiter/jobs/create")
+                                onClick={() => {
+                                    if (companyVerified) {
+                                        router.push("/recruiter/jobs/create");
+                                    }
+                                }}
+                                disabled={!companyVerified}
+                                title={
+                                    companyVerified
+                                        ? "Post a new job"
+                                        : "Company verification approval is required"
                                 }
-                                className="min-w-0 min-h-[150px] rounded-2xl border border-slate-800 bg-slate-900 p-4 text-left hover:border-green-500 transition flex flex-col"
+                                className={`min-w-0 min-h-[150px] rounded-2xl border bg-slate-900 p-4 text-left transition flex flex-col ${
+                                    companyVerified
+                                        ? "border-slate-800 hover:border-green-500 cursor-pointer"
+                                        : "border-slate-800 opacity-50 cursor-not-allowed"
+                                }`}
                             >
                                 <div className="text-3xl mb-4">
                                     ➕
@@ -825,8 +842,16 @@ export default function RecruiterDashboardPage() {
                                 </h4>
 
                                 <p className="mt-2 text-xs text-slate-400">
-                                    Create new job opportunities.
+                                    {companyVerified
+                                        ? "Create new job opportunities."
+                                        : "Available after company verification approval."}
                                 </p>
+
+                                {!companyVerified && (
+                                    <span className="mt-3 text-xs text-yellow-400">
+                                        🔒 Verification required
+                                    </span>
+                                )}
                             </button>
 
                             {/* APPLICATIONS */}

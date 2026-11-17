@@ -3,7 +3,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiRequest } from "../../../services/api";
+import {
+  apiRequest,
+  apiFileRequest,
+} from "../../../services/api";
 
 interface Candidate {
   id: number;
@@ -72,7 +75,6 @@ export default function AdminApplicationsPage() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [archiveFilter, setArchiveFilter] = useState("all");
 
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -82,27 +84,34 @@ export default function AdminApplicationsPage() {
     useState<ApplicationDetails | null>(null);
 
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [resumeLoading, setResumeLoading] = useState(false);
 
-  const fetchApplications = useCallback(async () => {
+  // --------------------------------------------------
+  // FETCH APPLICATIONS
+  // --------------------------------------------------
+
+  const loadApplications = async (
+    pageToLoad: number,
+    searchValue: string,
+    filterValue: string
+  ) => {
     try {
       setLoading(true);
       setError("");
 
       const params = new URLSearchParams({
-        skip: String(page * PAGE_SIZE),
+        skip: String(pageToLoad * PAGE_SIZE),
         limit: String(PAGE_SIZE),
       });
 
-      if (search.trim()) {
-        params.set("search", search.trim());
+      if (searchValue.trim()) {
+        params.set("search", searchValue.trim());
       }
 
-      if (statusFilter.trim()) {
-        params.set("application_status", statusFilter.trim());
-      }
-
-      if (archiveFilter !== "all") {
-        params.set("is_archived", archiveFilter);
+      if (filterValue === "archived") {
+        params.set("is_archived", "true");
+      } else if (filterValue) {
+        params.set("application_status", filterValue);
       }
 
       const response = await apiRequest<ApplicationsResponse>(
@@ -113,6 +122,7 @@ export default function AdminApplicationsPage() {
       setTotal(response.total);
     } catch (err) {
       console.error("Applications loading error:", err);
+
       setError(
         err instanceof Error
           ? err.message
@@ -121,7 +131,15 @@ export default function AdminApplicationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, archiveFilter]);
+  };
+
+  const fetchApplications = useCallback(async () => {
+    await loadApplications(page, search, statusFilter);
+  }, [page, search, statusFilter]);
+
+  // --------------------------------------------------
+  // ADMIN AUTHENTICATION
+  // --------------------------------------------------
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -143,6 +161,10 @@ export default function AdminApplicationsPage() {
     checkAdmin();
   }, [router, fetchApplications]);
 
+  // --------------------------------------------------
+  // APPLICATION DETAILS
+  // --------------------------------------------------
+
   const openApplicationDetails = async (applicationId: number) => {
     try {
       setDetailsLoading(true);
@@ -155,6 +177,7 @@ export default function AdminApplicationsPage() {
       setSelectedApplication(response);
     } catch (err) {
       console.error("Application details error:", err);
+
       alert(
         err instanceof Error
           ? err.message
@@ -164,6 +187,57 @@ export default function AdminApplicationsPage() {
       setDetailsLoading(false);
     }
   };
+
+  // --------------------------------------------------
+  // VIEW APPLICATION RESUME
+  // --------------------------------------------------
+
+  const viewApplicationResume = async (applicationId: number) => {
+    // Open the tab immediately to avoid popup blockers.
+    const previewWindow = window.open("", "_blank");
+
+    if (!previewWindow) {
+      alert("Please allow pop-ups to view the resume.");
+      return;
+    }
+
+    try {
+      setResumeLoading(true);
+
+      previewWindow.document.write(
+        "<p style='font-family:Arial;padding:20px'>Loading resume...</p>"
+      );
+
+      const blob = await apiFileRequest(
+        `/admin/applications/${applicationId}/resume`
+      );
+
+      const fileUrl = URL.createObjectURL(blob);
+
+      previewWindow.location.href = fileUrl;
+
+      // Keep the file URL available while the browser loads the document.
+      window.setTimeout(() => {
+        URL.revokeObjectURL(fileUrl);
+      }, 300000);
+    } catch (err) {
+      previewWindow.close();
+
+      console.error("Resume viewing error:", err);
+
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Unable to open the applicant's resume."
+      );
+    } finally {
+      setResumeLoading(false);
+    }
+  };
+
+  // --------------------------------------------------
+  // FORMAT DATE
+  // --------------------------------------------------
 
   const formatDate = (date: string) => {
     return new Date(date).toLocaleDateString("en-IN", {
@@ -175,10 +249,30 @@ export default function AdminApplicationsPage() {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
+  // --------------------------------------------------
+  // APPLY FILTERS
+  // --------------------------------------------------
+
   const applyFilters = () => {
     setPage(0);
-    fetchApplications();
+    loadApplications(0, search, statusFilter);
   };
+
+  // --------------------------------------------------
+  // CLEAR FILTERS
+  // --------------------------------------------------
+
+  const clearFilters = () => {
+    setSearch("");
+    setStatusFilter("");
+    setPage(0);
+
+    loadApplications(0, "", "");
+  };
+
+  // --------------------------------------------------
+  // PAGE UI
+  // --------------------------------------------------
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6 md:p-10">
@@ -207,6 +301,7 @@ export default function AdminApplicationsPage() {
             <p className="text-sm text-slate-400">
               Total Applications
             </p>
+
             <p className="text-3xl font-bold text-blue-400">
               {total}
             </p>
@@ -215,53 +310,43 @@ export default function AdminApplicationsPage() {
 
         {/* Filters */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
+            {/* Search */}
             <div className="md:col-span-2">
               <label className="block text-sm text-slate-400 mb-2">
                 Search
               </label>
+
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") applyFilters();
+                  if (e.key === "Enter") {
+                    applyFilters();
+                  }
                 }}
                 placeholder="Candidate, job title, company..."
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 outline-none focus:border-blue-500"
               />
             </div>
 
+            {/* Application Filter */}
             <div>
               <label className="block text-sm text-slate-400 mb-2">
-                Application Status
+                Application Filter
               </label>
-              <input
+
+              <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") applyFilters();
-                }}
-                placeholder="e.g. Applied"
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm text-slate-400 mb-2">
-                Archive Status
-              </label>
-              <select
-                value={archiveFilter}
-                onChange={(e) => {
-                  setArchiveFilter(e.target.value);
-                  setPage(0);
-                }}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 outline-none focus:border-blue-500"
               >
-                <option value="all">All Applications</option>
-                <option value="false">Not Archived</option>
-                <option value="true">Archived</option>
+                <option value="">All Applications</option>
+                <option value="Applied">Applied</option>
+                <option value="Shortlisted">Shortlisted</option>
+                <option value="Rejected">Rejected</option>
+                <option value="archived">Archived</option>
               </select>
             </div>
           </div>
@@ -275,12 +360,7 @@ export default function AdminApplicationsPage() {
             </button>
 
             <button
-              onClick={() => {
-                setSearch("");
-                setStatusFilter("");
-                setArchiveFilter("all");
-                setPage(0);
-              }}
+              onClick={clearFilters}
               className="bg-slate-800 hover:bg-slate-700 px-5 py-2.5 rounded-lg"
             >
               Clear Filters
@@ -298,6 +378,7 @@ export default function AdminApplicationsPage() {
           ) : error ? (
             <div className="p-12 text-center">
               <p className="text-red-400 mb-4">{error}</p>
+
               <button
                 onClick={fetchApplications}
                 className="bg-blue-600 px-5 py-2 rounded-lg"
@@ -335,6 +416,7 @@ export default function AdminApplicationsPage() {
                           <p className="font-medium">
                             {application.candidate.name}
                           </p>
+
                           <p className="text-xs text-slate-400">
                             {application.candidate.email}
                           </p>
@@ -344,6 +426,7 @@ export default function AdminApplicationsPage() {
                           <p className="font-medium">
                             {application.job.title}
                           </p>
+
                           <p className="text-xs text-slate-400">
                             {application.job.job_type}
                           </p>
@@ -455,6 +538,7 @@ export default function AdminApplicationsPage() {
                 <p className="text-sm text-blue-400">
                   Application #{selectedApplication.id}
                 </p>
+
                 <h2 className="text-2xl font-bold mt-1">
                   Application Details
                 </h2>
@@ -487,12 +571,16 @@ export default function AdminApplicationsPage() {
 
                 <div>
                   <p className="text-xs text-slate-500">Phone</p>
-                  <p>{selectedApplication.candidate.phone || "Not provided"}</p>
+                  <p>
+                    {selectedApplication.candidate.phone || "Not provided"}
+                  </p>
                 </div>
 
                 <div>
                   <p className="text-xs text-slate-500">Location</p>
-                  <p>{selectedApplication.candidate.location || "Not provided"}</p>
+                  <p>
+                    {selectedApplication.candidate.location || "Not provided"}
+                  </p>
                 </div>
               </div>
             </section>
@@ -591,13 +679,28 @@ export default function AdminApplicationsPage() {
                     </p>
                   </div>
 
+                  {/* Application Resume */}
                   <div>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-500 mb-2">
                       Application Resume
                     </p>
-                    <p className={selectedApplication.has_resume ? "text-green-400" : "text-slate-400"}>
-                      {selectedApplication.has_resume ? "Available" : "Not uploaded"}
-                    </p>
+
+                    {selectedApplication.has_resume ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          viewApplicationResume(selectedApplication.id)
+                        }
+                        disabled={resumeLoading}
+                        className="mt-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {resumeLoading ? "Opening Resume..." : "View Resume"}
+                      </button>
+                    ) : (
+                      <p className="text-slate-400 text-sm">
+                        Not uploaded
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -605,8 +708,10 @@ export default function AdminApplicationsPage() {
                   <p className="text-xs text-slate-500 mb-2">
                     About Yourself
                   </p>
+
                   <p className="text-sm text-slate-300 whitespace-pre-wrap">
-                    {selectedApplication.about_yourself || "No additional information provided."}
+                    {selectedApplication.about_yourself ||
+                      "No additional information provided."}
                   </p>
                 </div>
               </div>

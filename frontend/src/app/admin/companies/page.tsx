@@ -18,9 +18,21 @@ interface Company {
     document_2_uploaded: boolean;
     documents_status: string;
     verification_status: string;
+
+    // Latest verification request information
+    request_id: number | null;
+    request_type: string | null;
+    request_status: string | null;
+    version_number: number | null;
+    submitted_at: string | null;
 }
 
-type StatusFilter = "all" | "verified" | "pending_review" | "unverified" | "rejected";
+type StatusFilter =
+    | "all"
+    | "verified"
+    | "pending_review"
+    | "unverified"
+    | "rejected";
 
 export default function AdminCompaniesPage() {
     const router = useRouter();
@@ -92,6 +104,17 @@ export default function AdminCompaniesPage() {
 
         initializePage();
     }, [router, loadCompanies]);
+
+    // Navigate to the selected company's details page.
+    function viewCompanyDetails(company: Company) {
+        const requestQuery = company.request_id
+            ? `?request_id=${company.request_id}`
+            : "";
+
+        router.push(
+            `/admin/companies/${company.id}${requestQuery}`
+        );
+    }
 
     // Filter companies using the search text and selected status.
     const filteredCompanies = useMemo(() => {
@@ -422,12 +445,10 @@ export default function AdminCompaniesPage() {
 
                                             <td className="px-6 py-5">
                                                 <button
-                                                    onClick={() =>
-                                                        router.push("/admin/company_verification")
-                                                    }
+                                                    onClick={() => viewCompanyDetails(company)}
                                                     className="whitespace-nowrap rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-400 transition hover:bg-blue-500/20"
                                                 >
-                                                    Review →
+                                                    View Details →
                                                 </button>
                                             </td>
 

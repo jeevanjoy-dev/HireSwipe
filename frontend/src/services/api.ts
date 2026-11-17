@@ -126,7 +126,7 @@ function getResponseFilename(
         }
     }
 
-    // Supports standard quoted and unquoted filename values.
+    // Supports standard quoted and unquoted filenames.
     const filenameMatch = disposition.match(
         /filename\s*=\s*(?:"([^"]+)"|([^;]+))/i
     );
