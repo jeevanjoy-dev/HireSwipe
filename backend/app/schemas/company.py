@@ -22,6 +22,7 @@ class CompanyResponse(BaseModel):
     location: str | None = None
     website: str | None = None
     admin_profile_photo: str | None = None
+    logo: str | None = None
 
     # Business contact information
     business_email: str | None = None
@@ -30,6 +31,9 @@ class CompanyResponse(BaseModel):
 
     # Email verification status
     business_email_verified: bool = False
+
+    # Phone verification status
+    business_phone_verified: bool = False
 
     # Document verification status
     documents_status: str = "not_submitted"
@@ -64,4 +68,22 @@ class CompanyBusinessEmailRequest(BaseModel):
 class CompanyBusinessEmailOTPVerifyRequest(BaseModel):
     """Request to verify the OTP sent to the business email."""
 
-    otp: str
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class CompanyBusinessPhoneRequest(BaseModel):
+    """Request to generate a mock OTP for the company phone number."""
+
+    business_phone: str = Field(
+        pattern=r"^\+[1-9]\d{7,14}$"
+    )
+
+
+class CompanyBusinessPhoneOTPVerifyRequest(BaseModel):
+    """Request to verify the OTP generated for the company phone."""
+
+    otp: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$"
+    )

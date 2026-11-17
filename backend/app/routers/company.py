@@ -1,4 +1,4 @@
-
+import os
 from datetime import datetime
 import mimetypes
 import re
@@ -49,6 +49,8 @@ from app.schemas.company import (
     CompanyResponse,
     CompanyBusinessEmailRequest,
     CompanyBusinessEmailOTPVerifyRequest,
+    CompanyBusinessPhoneRequest,
+    CompanyBusinessPhoneOTPVerifyRequest,
 )
 
 from app.schemas.company_join_request import (
@@ -68,6 +70,8 @@ router = APIRouter(
     prefix="/companies",
     tags=["Company"],
 )
+
+PHONE_OTP_MODE = os.getenv("PHONE_OTP_MODE", "disabled").lower()
 
 
 # --------------------------------------------------
@@ -1106,6 +1110,165 @@ def verify_company_business_email_otp(
 
 
 # --------------------------------------------------
+# SEND COMPANY BUSINESS PHONE OTP
+# --------------------------------------------------
+
+@router.post("/my-admin-company/business-phone/send-otp")
+def send_company_business_phone_otp(
+    request_data: CompanyBusinessPhoneRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Generate a mock OTP for the company's business phone."""
+
+    company = ensure_company_admin(current_user, db)
+
+    # Allow mock OTP only when configured in the environment.
+    if PHONE_OTP_MODE != "mock":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Phone OTP mock mode is disabled.",
+        )
+
+    business_phone = request_data.business_phone.strip()
+
+    # Return immediately if this number is already verified.
+    if (
+        company.business_phone == business_phone
+        and company.business_phone_verified
+    ):
+        return {
+            "message": "This business phone number is already verified.",
+            "business_phone": business_phone,
+            "business_phone_verified": True,
+        }
+
+    # Prevent frequent OTP requests.
+    if not can_resend_otp(
+        company.business_phone_otp_last_sent_at
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait before requesting another OTP.",
+        )
+
+    otp = generate_otp()
+
+    # Save the new phone number and OTP information.
+    company.business_phone = business_phone
+    company.business_phone_verified = False
+    company.business_phone_verified_at = None
+
+    company.business_phone_otp_hash = hash_otp(otp)
+    company.business_phone_otp_expires_at = get_otp_expiry()
+    company.business_phone_otp_attempts = 0
+    company.business_phone_otp_last_sent_at = datetime.utcnow()
+
+    try:
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Mock OTP generated successfully.",
+        "business_phone": company.business_phone,
+        "business_phone_verified": False,
+        "mock_otp": otp,
+    }
+
+
+# --------------------------------------------------
+# VERIFY COMPANY BUSINESS PHONE MOCK OTP
+# --------------------------------------------------
+
+@router.post("/my-admin-company/business-phone/verify-otp")
+def verify_company_business_phone_otp(
+    request_data: CompanyBusinessPhoneOTPVerifyRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Verify the mock OTP for the company's business phone."""
+
+    company = ensure_company_admin(current_user, db)
+
+    if company.business_phone_verified:
+        return {
+            "message": "Company business phone is already verified.",
+            "business_phone": company.business_phone,
+            "business_phone_verified": True,
+        }
+
+    if (
+        not company.business_phone
+        or not company.business_phone_otp_hash
+        or not company.business_phone_otp_expires_at
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please generate a phone OTP first.",
+        )
+
+    # Check OTP expiry.
+    if datetime.utcnow() > company.business_phone_otp_expires_at:
+        company.business_phone_otp_hash = None
+        company.business_phone_otp_expires_at = None
+        company.business_phone_otp_attempts = 0
+
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP has expired. Please request a new OTP.",
+        )
+
+    # Check maximum attempts.
+    if company.business_phone_otp_attempts >= MAX_OTP_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Maximum OTP attempts exceeded. Request a new OTP.",
+        )
+
+    # Verify OTP.
+    if not verify_otp(
+        request_data.otp,
+        company.business_phone_otp_hash,
+    ):
+        company.business_phone_otp_attempts += 1
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OTP.",
+        )
+
+    # Mark phone number as verified.
+    company.business_phone_verified = True
+    company.business_phone_verified_at = datetime.utcnow()
+
+    # Clear OTP data after successful verification.
+    company.business_phone_otp_hash = None
+    company.business_phone_otp_expires_at = None
+    company.business_phone_otp_attempts = 0
+
+    try:
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Company business phone verified successfully.",
+        "business_phone": company.business_phone,
+        "business_phone_verified": True,
+    }
+
+
+# --------------------------------------------------
 # UPLOAD COMPANY VERIFICATION DOCUMENT
 # --------------------------------------------------
 
@@ -1406,6 +1569,138 @@ def delete_company_admin_photo(
     delete_stored_file(old_photo_key)
 
     return company
+
+
+
+# --------------------------------------------------
+# UPLOAD / REPLACE COMPANY LOGO
+# --------------------------------------------------
+
+@router.post("/my-admin-company/logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Allow only the Company Admin to upload or replace the company logo."""
+
+    company = ensure_company_admin(current_user, db)
+
+    new_logo_key = None
+    old_logo_key = company.logo
+
+    try:
+        new_logo_key = await save_upload(
+            upload=file,
+            category="company_logos",
+            allowed_extensions=ALLOWED_PHOTO_EXTENSIONS,
+            max_size=MAX_PHOTO_SIZE,
+        )
+
+        company.logo = new_logo_key
+
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+
+        if new_logo_key:
+            delete_stored_file(new_logo_key)
+
+        raise
+
+    finally:
+        await file.close()
+
+    # Delete the previous logo only after the new one is saved.
+    if old_logo_key:
+        delete_stored_file(old_logo_key)
+
+    return {
+        "message": "Company logo uploaded successfully.",
+        "company_id": company.id,
+        "logo_uploaded": True,
+    }
+
+
+# --------------------------------------------------
+# VIEW COMPANY LOGO
+# --------------------------------------------------
+
+@router.get("/{company_id}/logo")
+def get_company_logo(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Allow the company admin and associated recruiters to view the logo."""
+
+    company = check_company_access(
+        company_id,
+        current_user,
+        db,
+    )
+
+    if not company.logo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Company logo not found.",
+        )
+
+    file_path = get_stored_file(company.logo)
+
+    media_type = (
+        mimetypes.guess_type(file_path.name)[0]
+        or "application/octet-stream"
+    )
+
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=file_path.name,
+    )
+
+
+# --------------------------------------------------
+# DELETE COMPANY LOGO
+# --------------------------------------------------
+
+@router.delete("/my-admin-company/logo")
+def delete_company_logo(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Allow only the Company Admin to delete the company logo."""
+
+    company = ensure_company_admin(current_user, db)
+
+    old_logo_key = company.logo
+
+    if not old_logo_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No company logo to delete.",
+        )
+
+    company.logo = None
+
+    try:
+        db.commit()
+        db.refresh(company)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    delete_stored_file(old_logo_key)
+
+    return {
+        "message": "Company logo deleted successfully.",
+        "company_id": company.id,
+        "logo_uploaded": False,
+    }
+
 
 
 # --------------------------------------------------

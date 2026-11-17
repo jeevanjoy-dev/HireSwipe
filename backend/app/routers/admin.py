@@ -64,6 +64,21 @@ def company_email_domain_matches(company: Company) -> bool:
     return email_domain == website_domain
 
 
+def email_domain_matches_website(
+    email: str | None,
+    website: str | None
+) -> bool:
+    """Check whether a specific email matches the company website domain."""
+
+    if not email or not website or "@" not in email:
+        return False
+
+    email_domain = email.rsplit("@", 1)[-1].strip().lower()
+    website_domain = get_domain(website)
+
+    return bool(website_domain and email_domain == website_domain)
+
+
 # --------------------------------------------------
 # COMPANY VERIFICATION HELPERS
 # --------------------------------------------------
@@ -91,11 +106,7 @@ def get_verification_request(
     company_id: int,
     request_id: int | None = None
 ):
-    """
-    Return a specific verification request.
-
-    If request_id is omitted, return the latest request.
-    """
+    """Return a specific request or the latest request."""
 
     query = db.query(CompanyVerificationRequest).filter(
         CompanyVerificationRequest.company_id == company_id
@@ -115,12 +126,7 @@ def ensure_legacy_verification_request(
     db: Session,
     company: Company
 ):
-    """
-    Create a version-1 verification request for older companies
-    whose documents are still stored directly on the Company model.
-
-    Existing document storage keys are copied, not deleted.
-    """
+    """Preserve legacy company verification documents."""
 
     existing_request = get_latest_verification_request(
         db,
@@ -141,8 +147,6 @@ def ensure_legacy_verification_request(
         "draft"
     )
 
-    # Don't create unnecessary historical requests for companies
-    # that have never submitted documents or verification.
     if (
         not company.document_1
         and not company.document_2
@@ -171,10 +175,7 @@ def ensure_legacy_verification_request(
 
 
 def ensure_legacy_pending_requests(db: Session):
-    """
-    Backfill old companies that have pending verification status
-    but do not yet have a CompanyVerificationRequest record.
-    """
+    """Backfill legacy pending companies."""
 
     legacy_companies = (
         db.query(Company)
@@ -229,7 +230,6 @@ def get_admin_dashboard(
 
     total_applications = db.query(Application).count()
 
-    # Backfill legacy pending companies before counting.
     ensure_legacy_pending_requests(db)
 
     pending_verifications = (
@@ -276,7 +276,7 @@ def get_all_companies(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Return all registered companies and their latest verification details."""
+    """Return all companies and their latest verification details."""
 
     companies = db.query(Company).order_by(
         Company.id.desc()
@@ -309,13 +309,30 @@ def get_all_companies(
             else company.document_2
         )
 
+        business_email = (
+            request.business_email
+            if request
+            else company.business_email
+        )
+
+        email_verified = (
+            request.business_email_verified
+            if request
+            else company.business_email_verified
+        )
+
         results.append({
             "id": company.id,
             "name": company.name,
             "website": company.website,
-            "business_email": company.business_email,
-            "business_email_verified": company.business_email_verified,
-            "domain_match": company_email_domain_matches(company),
+
+            "business_email": business_email,
+            "business_email_verified": bool(email_verified),
+            "domain_match": email_domain_matches_website(
+                business_email,
+                company.website
+            ),
+
             "business_phone": company.business_phone,
             "business_address": company.business_address,
 
@@ -339,7 +356,6 @@ def get_all_companies(
 
 # --------------------------------------------------
 # LIST PENDING VERIFICATION REQUESTS
-# Keep this route BEFORE /companies/{company_id}
 # --------------------------------------------------
 
 @router.get("/companies/pending")
@@ -347,7 +363,7 @@ def get_pending_companies(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Return all verification requests awaiting platform-admin review."""
+    """Return all verification requests awaiting admin review."""
 
     ensure_legacy_pending_requests(db)
 
@@ -377,9 +393,16 @@ def get_pending_companies(
             "id": company.id,
             "name": company.name,
             "website": company.website,
-            "business_email": company.business_email,
-            "business_email_verified": company.business_email_verified,
-            "domain_match": company_email_domain_matches(company),
+
+            "business_email": request.business_email,
+            "business_email_verified": bool(
+                request.business_email_verified
+            ),
+            "domain_match": email_domain_matches_website(
+                request.business_email,
+                company.website
+            ),
+
             "business_phone": company.business_phone,
             "business_address": company.business_address,
 
@@ -412,7 +435,7 @@ def get_company_verification_details(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Return detailed company and selected verification request information."""
+    """Return company details and verification history."""
 
     company = db.query(Company).filter(
         Company.id == company_id
@@ -455,22 +478,56 @@ def get_company_verification_details(
         else company.document_2
     )
 
+    business_email = (
+        request.business_email
+        if request
+        else company.business_email
+    )
+
+    email_verified = (
+        request.business_email_verified
+        if request
+        else company.business_email_verified
+    )
+
+    email_verified_at = (
+        request.business_email_verified_at
+        if request
+        else company.business_email_verified_at
+    )
+
+    verification_history = (
+        db.query(CompanyVerificationRequest)
+        .filter(
+            CompanyVerificationRequest.company_id == company_id
+        )
+        .order_by(
+            CompanyVerificationRequest.version_number.desc()
+        )
+        .all()
+    )
+
     return {
         "id": company.id,
         "name": company.name,
         "description": company.description,
+        "location": company.location,
         "website": company.website,
 
-        "business_email": company.business_email,
-        "business_email_verified": company.business_email_verified,
-        "business_email_verified_at": company.business_email_verified_at,
+        "business_email": business_email,
+        "business_email_verified": bool(email_verified),
+        "business_email_verified_at": email_verified_at,
 
         "website_domain": get_domain(company.website),
         "email_domain": (
-            company.business_email.rsplit("@", 1)[-1].lower()
-            if company.business_email else None
+            business_email.rsplit("@", 1)[-1].lower()
+            if business_email and "@" in business_email
+            else None
         ),
-        "domain_match": company_email_domain_matches(company),
+        "domain_match": email_domain_matches_website(
+            business_email,
+            company.website
+        ),
 
         "business_phone": company.business_phone,
         "business_address": company.business_address,
@@ -488,7 +545,24 @@ def get_company_verification_details(
 
         "submitted_at": request.submitted_at if request else None,
         "reviewed_at": request.reviewed_at if request else None,
-        "rejection_reason": request.rejection_reason if request else None
+        "rejection_reason": request.rejection_reason if request else None,
+
+        "verification_history": [
+            {
+                "id": history.id,
+                "request_type": history.request_type,
+                "version_number": history.version_number,
+                "status": history.status,
+                "business_email": history.business_email,
+                "business_email_verified": bool(
+                    history.business_email_verified
+                ),
+                "submitted_at": history.submitted_at,
+                "reviewed_at": history.reviewed_at,
+                "rejection_reason": history.rejection_reason
+            }
+            for history in verification_history
+        ]
     }
 
 
@@ -506,7 +580,7 @@ def view_company_document(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Allow platform admins to view documents from a specific request."""
+    """Allow admins to view documents from a specific request."""
 
     if document_number not in (1, 2):
         raise HTTPException(
@@ -620,54 +694,59 @@ def approve_company(
             detail="Only pending verification requests can be approved."
         )
 
-    # Business email must be verified.
-    if not company.business_email_verified:
+    if not request.business_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Business email must be verified first."
+            detail="Business email is required for this verification request."
         )
 
-    # Business email domain must match website domain.
-    if not company_email_domain_matches(company):
+    if not request.business_email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Business email must be verified for this request."
+        )
+
+    if not email_domain_matches_website(
+        request.business_email,
+        company.website
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Business email domain does not match the company website."
         )
 
-    # Business phone is required.
     if not company.business_phone or not company.business_phone.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Business phone number is required."
         )
 
-    # Business address is required.
     if not company.business_address or not company.business_address.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Business postal address is required."
         )
 
-    # Both documents must exist on this specific request.
     if not request.document_1 or not request.document_2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Both company verification documents must be uploaded."
         )
 
-    # Approve the selected request.
     request.status = "approved"
     request.reviewed_at = datetime.utcnow()
     request.reviewed_by_user_id = current_admin.id
     request.rejection_reason = None
 
-    # Replace the company's currently approved documents.
-    # Previous request records remain unchanged for history.
     company.document_1 = request.document_1
     company.document_2 = request.document_2
 
-    # Every successful approval makes the company verified.
-    # This also reactivates companies previously marked inactive.
+    company.business_email = request.business_email
+    company.business_email_verified = True
+    company.business_email_verified_at = (
+        request.business_email_verified_at
+    )
+
     company.verification_status = "verified"
     company.documents_status = "approved"
 
@@ -690,7 +769,6 @@ def approve_company(
 # REJECT COMPANY VERIFICATION REQUEST
 # --------------------------------------------------
 
-
 @router.put("/companies/{company_id}/reject")
 def reject_company(
     company_id: int,
@@ -701,7 +779,6 @@ def reject_company(
 ):
     """Reject an initial or re-verification request."""
 
-    # Find and lock the company.
     company = (
         db.query(Company)
         .filter(Company.id == company_id)
@@ -715,14 +792,12 @@ def reject_company(
             detail="Company not found."
         )
 
-    # Find the requested verification record.
     verification_request = get_verification_request(
         db,
         company_id,
         request_id
     )
 
-    # Handle legacy verification records.
     if verification_request is None and request_id is None:
         verification_request = ensure_legacy_verification_request(
             db,
@@ -735,14 +810,12 @@ def reject_company(
             detail="No verification request found."
         )
 
-    # Only pending requests can be rejected.
     if verification_request.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only pending verification requests can be rejected."
         )
 
-    # Validate and normalize the rejection reason.
     normalized_reason = (
         rejection_reason.strip()
         if isinstance(rejection_reason, str)
@@ -752,7 +825,6 @@ def reject_company(
     if normalized_reason == "":
         normalized_reason = None
 
-    # Check whether this company has previously been approved.
     previously_approved = (
         db.query(CompanyVerificationRequest.id)
         .filter(
@@ -764,21 +836,16 @@ def reject_company(
         is not None
     )
 
-    # Update verification request.
     verification_request.status = "rejected"
     verification_request.reviewed_at = datetime.utcnow()
     verification_request.reviewed_by_user_id = admin.id
     verification_request.rejection_reason = normalized_reason
 
-    # Update company document status.
     company.documents_status = "rejected"
 
     if previously_approved:
-        # Rejected re-verification makes the company inactive.
-        # Existing approved documents remain unchanged.
         company.verification_status = "inactive"
     else:
-        # First-time verification rejection.
         company.verification_status = "rejected"
 
     db.commit()
@@ -1335,8 +1402,6 @@ def update_job_status(
             detail="Job not found."
         )
 
-    # Deactivation is always allowed.
-    # Activation requires a verified company.
     if is_active:
 
         recruiter_profile = db.query(RecruiterProfile).filter(
@@ -1356,8 +1421,6 @@ def update_job_status(
                 Company.id == recruiter_profile.company_id
             ).first()
 
-        # Company admins may have their company linked through
-        # Company.admin_user_id rather than RecruiterProfile.company_id.
         if company is None:
             company = db.query(Company).filter(
                 Company.admin_user_id == recruiter_profile.user_id
@@ -1620,3 +1683,46 @@ def get_application_details(
             "website": company.website,
         } if company else None,
     }
+
+
+# --------------------------------------------------
+# VIEW APPLICATION RESUME (PLATFORM ADMIN)
+# --------------------------------------------------
+
+@router.get("/applications/{application_id}/resume")
+def view_application_resume(
+    application_id: int,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(get_current_admin),
+):
+    """Allow platform admins to view the resume submitted with an application."""
+
+    application = db.query(Application).filter(
+        Application.id == application_id
+    ).first()
+
+    if not application:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    if not application.resume:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No resume was submitted with this application.",
+        )
+
+    file_path = get_stored_file(application.resume)
+
+    media_type = (
+        mimetypes.guess_type(file_path.name)[0]
+        or "application/octet-stream"
+    )
+
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=file_path.name,
+        content_disposition_type="inline",
+    )

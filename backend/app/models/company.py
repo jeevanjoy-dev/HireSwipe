@@ -59,6 +59,12 @@ class Company(Base):
         nullable=True
     )
 
+    # Company logo
+    logo: Mapped[str | None] = mapped_column(
+    String(255),
+    nullable=True
+    )
+
     # ------------------------------------------
     # COMPANY BUSINESS CONTACT INFORMATION
     # ------------------------------------------
@@ -114,6 +120,44 @@ class Company(Base):
         DateTime,
         nullable=True
     )
+
+
+    # ------------------------------------------
+    # COMPANY PHONE OTP VERIFICATION
+    # ------------------------------------------
+
+    business_phone_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    business_phone_otp_hash: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True
+    )
+
+    business_phone_otp_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+
+    business_phone_otp_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    business_phone_otp_last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+
+    business_phone_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+
 
     # ------------------------------------------
     # COMPANY DOCUMENT VERIFICATION
