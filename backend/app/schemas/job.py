@@ -232,27 +232,9 @@ class JobUpdate(BaseModel):
         return self
 
 
-class JobResponse(BaseModel):
-    """Represent job information returned by the API.
 
-    Attributes:
-        id: Unique identifier of the job.
-        recruiter_id: ID of the recruiter who posted the job.
-        title: Job title.
-        description: Job description.
-        location: Job location.
-        job_type: Employment type.
-        experience_min: Minimum years of experience.
-        experience_max: Maximum years of experience.
-        salary_min: Minimum salary.
-        salary_max: Maximum salary.
-        requirements: Job requirements.
-        application_method: How candidates apply for the job.
-        application_url: External application URL, if applicable.
-        application_email: HR email address, if applicable.
-        is_active: Whether the job is active.
-        created_at: Date and time when the job was created.
-    """
+class JobResponse(BaseModel):
+    """Represent job information returned by the API."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -278,6 +260,12 @@ class JobResponse(BaseModel):
 
     is_active: bool
     created_at: datetime
+
+    # Job moderation information
+    moderation_status: str
+    moderation_reason: str | None = None
+    moderated_at: datetime | None = None
+    moderated_by: int | None = None
 
 
 class JobListResponse(BaseModel):

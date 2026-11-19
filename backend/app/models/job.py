@@ -1,117 +1,96 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
 class Job(Base):
-    """Represent a job posted by a recruiter on HireSwipe.
-
-    Attributes:
-        id: Unique identifier for the job.
-        recruiter_id: ID of the recruiter profile that posted the job.
-        title: Title of the job position.
-        description: Detailed description of the job.
-        location: Location where the job is based.
-        job_type: Type of employment such as full-time or internship.
-        experience_min: Minimum years of experience required for the position.
-        experience_max: Maximum years of experience accepted for the position.
-        salary_min: Minimum salary offered for the position.
-        salary_max: Maximum salary offered for the position.
-        requirements: Skills and qualifications required for the position.
-        application_method: Method candidates use to apply for the job.
-        application_url: External company application URL, if applicable.
-        application_email: HR email address, if applicable.
-        is_active: Whether the job is currently accepting applications.
-        created_at: Date and time when the job was created.
-    """
-
     __tablename__ = "jobs"
 
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
     recruiter_id: Mapped[int] = mapped_column(
         ForeignKey("recruiter_profiles.id"),
-        nullable=False
+        nullable=False,
     )
 
-    title: Mapped[str] = mapped_column(
-        String(150),
-        nullable=False
-    )
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    location: Mapped[str | None] = mapped_column(String(150), nullable=True)
 
-    description: Mapped[str] = mapped_column(
-        Text,
-        nullable=False
-    )
-
-    location: Mapped[str | None] = mapped_column(
-        String(150),
-        nullable=True
-    )
-
-    job_type: Mapped[str] = mapped_column(
-        String(50),
-        nullable=False
-    )
+    job_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
     experience_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
     experience_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    salary_min: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True
-    )
+    salary_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    salary_max: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True
-    )
-
-    requirements: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True
-    )
+    requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     application_method: Mapped[str] = mapped_column(
         String(20),
         default="Platform",
-        nullable=False
+        nullable=False,
     )
 
     application_url: Mapped[str | None] = mapped_column(
         String(500),
-        nullable=True
+        nullable=True,
     )
 
     application_email: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=True
+        nullable=True,
     )
 
+    # Existing job activation field
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
-        nullable=False
+        nullable=False,
+    )
+
+    # Admin moderation fields
+    moderation_status: Mapped[str] = mapped_column(
+        String(30),
+        default="normal",
+        nullable=False,
+    )
+
+    moderation_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    moderated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    moderated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
-        nullable=False
+        nullable=False,
     )
 
-    recruiter = relationship(
-        "RecruiterProfile",
-        back_populates="jobs"
-    )
+    # Relationships
+    recruiter = relationship("RecruiterProfile", back_populates="jobs")
 
     applications = relationship(
         "Application",
@@ -120,7 +99,25 @@ class Job(Base):
     )
 
     saved_jobs = relationship(
-       "SavedJob",
-       back_populates="job",
-       cascade="all, delete-orphan",
-)
+        "SavedJob",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+
+    reports = relationship(
+        "JobReport",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    moderator = relationship(
+        "User",
+        foreign_keys=[moderated_by],
+    )
+
+    reapproval_requests = relationship(
+        "JobReapprovalRequest",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )   

@@ -11,12 +11,19 @@ from app.models.job import Job
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.company import Company
 from app.models.user import User
+from app.models.job_reapproval_request import JobReapprovalRequest
 
 from app.schemas.job import (
     JobCreate,
     JobResponse,
     JobUpdate,
     JobListResponse,
+    
+)
+
+from app.schemas.job_reapproval import (
+    JobReapprovalCreate,
+    JobReapprovalResponse,
 )
 
 
@@ -67,6 +74,82 @@ def get_verified_recruiter_company(
 
 
 # --------------------------------------------------
+# RECRUITER BLOCK CHECK
+# --------------------------------------------------
+
+def ensure_recruiter_access(current_user: User, db: Session):
+    """
+    Prevent individually blocked recruiters and recruiters
+    belonging to a company whose primary recruiter is blocked
+    from managing jobs.
+    """
+
+    # Check individual recruiter block
+    if current_user.is_blocked:
+        reason = current_user.blocked_reason or "No reason provided."
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Your recruiter account has been blocked.",
+                "reason": reason,
+                "blocked_type": "individual",
+            },
+        )
+
+    # Find the recruiter's profile
+    recruiter_profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if recruiter_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    # Find the associated company
+    if recruiter_profile.company_id is None:
+        return
+
+    company = (
+        db.query(Company)
+        .filter(Company.id == recruiter_profile.company_id)
+        .first()
+    )
+
+    if company is None or company.admin_user_id is None:
+        return
+
+    # Check whether the primary recruiter is blocked
+    primary_recruiter = (
+        db.query(User)
+        .filter(User.id == company.admin_user_id)
+        .first()
+    )
+
+    if primary_recruiter and primary_recruiter.is_blocked:
+        reason = (
+            primary_recruiter.blocked_reason
+            or "No reason provided."
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": (
+                    "Your company's primary recruiter has been blocked. "
+                    "Job management is temporarily restricted."
+                ),
+                "reason": reason,
+                "blocked_type": "primary_recruiter",
+            },
+        )
+
+
+# --------------------------------------------------
 # CREATE JOB
 # --------------------------------------------------
 
@@ -88,6 +171,7 @@ def create_job(
             detail="Only recruiters can create jobs.",
         )
 
+    ensure_recruiter_access(current_user, db)
     recruiter_profile = (
         db.query(RecruiterProfile)
         .filter(RecruiterProfile.user_id == current_user.id)
@@ -179,6 +263,224 @@ def get_my_jobs(
 
 
 # --------------------------------------------------
+# SUBMIT JOB REAPPROVAL REQUEST
+# --------------------------------------------------
+
+@router.post(
+    "/{job_id}/reapproval-request",
+    response_model=JobReapprovalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def submit_job_reapproval_request(
+    job_id: int,
+    request_data: JobReapprovalCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Allow a recruiter to request reapproval for a hidden job."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can request job reapproval.",
+        )
+
+    ensure_recruiter_access(current_user, db)
+
+    recruiter_profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if recruiter_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    get_verified_recruiter_company(recruiter_profile, db)
+
+    job = (
+        db.query(Job)
+        .filter(Job.id == job_id)
+        .first()
+    )
+
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found.",
+        )
+
+    if job.recruiter_id != recruiter_profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not allowed to request reapproval for this job.",
+        )
+
+    if job.moderation_status == "deactivated":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Permanently deactivated jobs cannot be submitted for reapproval.",
+        )
+
+    if job.moderation_status != "hidden":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only hidden jobs can be submitted for reapproval.",
+        )
+
+    existing_request = (
+        db.query(JobReapprovalRequest)
+        .filter(
+            JobReapprovalRequest.job_id == job.id,
+            JobReapprovalRequest.status == "pending",
+        )
+        .first()
+    )
+
+    if existing_request:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A reapproval request is already pending for this job.",
+        )
+
+    new_request = JobReapprovalRequest(
+        job_id=job.id,
+        recruiter_id=recruiter_profile.id,
+        recruiter_message=request_data.recruiter_message,
+        status="pending",
+    )
+
+    job.moderation_status = "pending_reapproval"
+
+    db.add(new_request)
+    db.commit()
+    db.refresh(new_request)
+
+    return new_request
+
+
+# --------------------------------------------------
+# GET MY JOB REAPPROVAL REQUESTS
+# --------------------------------------------------
+
+@router.get(
+    "/my-reapproval-requests",
+    response_model=list[JobReapprovalResponse],
+)
+def get_my_reapproval_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get reapproval requests submitted by the authenticated recruiter."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can view their reapproval requests.",
+        )
+
+    recruiter_profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if recruiter_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    requests = (
+        db.query(JobReapprovalRequest)
+        .filter(
+            JobReapprovalRequest.recruiter_id == recruiter_profile.id
+        )
+        .order_by(JobReapprovalRequest.created_at.desc())
+        .all()
+    )
+
+    return requests
+
+# --------------------------------------------------
+# GET RECRUITER ACCESS STATUS
+# --------------------------------------------------
+
+@router.get("/recruiter-access-status")
+def get_recruiter_access_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the recruiter's individual and company-level block status."""
+
+    if current_user.role != "recruiter":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only recruiters can access this endpoint.",
+        )
+
+    # Check individual block first
+    if current_user.is_blocked:
+        return {
+            "is_restricted": True,
+            "blocked_type": "individual",
+            "reason": current_user.blocked_reason or "No reason provided.",
+            "message": "Your recruiter account has been blocked.",
+        }
+
+    recruiter_profile = (
+        db.query(RecruiterProfile)
+        .filter(RecruiterProfile.user_id == current_user.id)
+        .first()
+    )
+
+    if recruiter_profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    # Check primary recruiter block
+    if recruiter_profile.company_id is not None:
+        company = (
+            db.query(Company)
+            .filter(Company.id == recruiter_profile.company_id)
+            .first()
+        )
+
+        if company and company.admin_user_id is not None:
+            primary_recruiter = (
+                db.query(User)
+                .filter(User.id == company.admin_user_id)
+                .first()
+            )
+
+            if primary_recruiter and primary_recruiter.is_blocked:
+                return {
+                    "is_restricted": True,
+                    "blocked_type": "primary_recruiter",
+                    "reason": (
+                        primary_recruiter.blocked_reason
+                        or "No reason provided."
+                    ),
+                    "message": (
+                        "Your company's primary recruiter has been blocked. "
+                        "Job management is temporarily restricted."
+                    ),
+                }
+
+    return {
+        "is_restricted": False,
+        "blocked_type": None,
+        "reason": None,
+        "message": "Your recruiter account has normal access.",
+    }
+
+
+# --------------------------------------------------
 # SEARCH AND FILTER JOBS
 # --------------------------------------------------
 
@@ -201,7 +503,7 @@ def get_jobs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Search active jobs belonging to verified companies."""
+    """Search jobs that are active, moderated and from verified companies."""
 
     if current_user.role != "candidate":
         raise HTTPException(
@@ -229,12 +531,18 @@ def get_jobs(
             Job.recruiter_id == RecruiterProfile.id,
         )
         .join(
+            User,
+            RecruiterProfile.user_id == User.id,
+        )
+        .join(
             Company,
             RecruiterProfile.company_id == Company.id,
         )
         .filter(
             Job.is_active.is_(True),
+            Job.moderation_status == "normal",
             Company.verification_status == "verified",
+            User.is_blocked.is_(False),
         )
     )
 
@@ -300,7 +608,7 @@ def get_job(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Get a job only when it is active and its company is verified."""
+    """Get a job only when it is visible to candidates."""
 
     job = (
         db.query(Job)
@@ -309,13 +617,19 @@ def get_job(
             Job.recruiter_id == RecruiterProfile.id,
         )
         .join(
+            User,
+            RecruiterProfile.user_id == User.id,
+        )
+        .join(
             Company,
             RecruiterProfile.company_id == Company.id,
         )
         .filter(
             Job.id == job_id,
             Job.is_active.is_(True),
+            Job.moderation_status == "normal",
             Company.verification_status == "verified",
+            User.is_blocked.is_(False),
         )
         .first()
     )
@@ -350,6 +664,8 @@ def update_job(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only recruiters can update jobs.",
         )
+
+    ensure_recruiter_access(current_user, db)
 
     recruiter_profile = (
         db.query(RecruiterProfile)
@@ -460,6 +776,8 @@ def delete_job(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only recruiters can delete jobs.",
         )
+
+    ensure_recruiter_access(current_user, db)
 
     recruiter_profile = (
         db.query(RecruiterProfile)

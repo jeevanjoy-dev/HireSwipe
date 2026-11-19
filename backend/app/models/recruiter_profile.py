@@ -58,3 +58,9 @@ class RecruiterProfile(Base):
       back_populates="recruiter"
 
     )
+
+    reapproval_requests = relationship(
+        "JobReapprovalRequest",
+        back_populates="recruiter",
+        cascade="all, delete-orphan",
+    )

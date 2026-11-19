@@ -9,6 +9,7 @@ from app.routers import application
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import savedjob
 from app.routers import admin
+from app.routers import job_report
 
 
 
@@ -44,6 +45,9 @@ app.include_router(application.router)
 app.include_router(savedjob.router)
 
 app.include_router(admin.router)
+
+app.include_router(job_report.router)
+
 
 
 

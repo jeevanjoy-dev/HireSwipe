@@ -19,6 +19,8 @@ from app.models.application import Application
 from app.models.recruiter_profile import RecruiterProfile
 from app.models.company_join_request import CompanyJoinRequest
 from app.models.candidate_profile import CandidateProfile
+from app.models.job_reapproval_request import JobReapprovalRequest
+from app.schemas.job_reapproval import JobReapprovalReview
 
 from app.services.file_storage import get_stored_file
 
@@ -926,6 +928,9 @@ def get_all_recruiters(
             "name": user.name,
             "email": user.email,
             "email_verified": user.email_verified,
+            "is_blocked": user.is_blocked,
+            "blocked_reason": user.blocked_reason,
+            "blocked_at": user.blocked_at,
 
             "recruiter_profile_id": profile.id if profile else None,
             "designation": profile.designation if profile else None,
@@ -946,6 +951,7 @@ def get_all_recruiters(
 # --------------------------------------------------
 # VIEW RECRUITER DETAILS
 # --------------------------------------------------
+
 
 @router.get("/recruiters/{recruiter_id}")
 def get_recruiter_details(
@@ -998,6 +1004,11 @@ def get_recruiter_details(
         "name": recruiter.name,
         "email": recruiter.email,
         "email_verified": recruiter.email_verified,
+
+        # Recruiter blocking information
+        "is_blocked": recruiter.is_blocked,
+        "blocked_reason": recruiter.blocked_reason,
+        "blocked_at": recruiter.blocked_at,
 
         "recruiter_profile": {
             "id": profile.id,
@@ -1257,6 +1268,9 @@ def get_all_jobs(
             "application_method": job.application_method,
             "is_active": job.is_active,
             "created_at": job.created_at,
+            "moderation_status": job.moderation_status,
+            "moderation_reason": job.moderation_reason,
+            "moderated_at": job.moderated_at,
 
             "recruiter": {
                 "id": recruiter.id,
@@ -1281,6 +1295,7 @@ def get_all_jobs(
 # --------------------------------------------------
 # VIEW JOB DETAILS
 # --------------------------------------------------
+
 
 @router.get("/jobs/{job_id}")
 def get_job_details(
@@ -1363,18 +1378,27 @@ def get_job_details(
         "is_active": job.is_active,
         "created_at": job.created_at,
 
+        # Moderation information
+        "moderation_status": job.moderation_status,
+        "moderation_reason": job.moderation_reason,
+        "moderated_at": job.moderated_at,
+        "moderated_by": job.moderated_by,
+
         "recruiter": {
             "id": recruiter.id,
             "name": recruiter.name,
             "email": recruiter.email,
-            "designation": recruiter_profile.designation
+            "designation": recruiter_profile.designation,
+            "is_blocked": recruiter.is_blocked,
+            "blocked_reason": recruiter.blocked_reason
         },
 
         "company": {
             "id": company.id,
             "name": company.name,
             "website": company.website,
-            "location": company.location
+            "location": company.location,
+            "verification_status": company.verification_status
         } if company else None
     }
 
@@ -1383,6 +1407,7 @@ def get_job_details(
 # ACTIVATE OR DEACTIVATE JOB
 # --------------------------------------------------
 
+
 @router.put("/jobs/{job_id}/status")
 def update_job_status(
     job_id: int,
@@ -1390,11 +1415,11 @@ def update_job_status(
     db: Session = Depends(get_db),
     admin: User = Depends(get_current_admin)
 ):
-    """Allow platform admin to activate or deactivate a job."""
+    """Allow admin to activate or deactivate jobs safely."""
 
     job = db.query(Job).filter(
         Job.id == job_id
-    ).first()
+    ).with_for_update().first()
 
     if not job:
         raise HTTPException(
@@ -1403,6 +1428,18 @@ def update_job_status(
         )
 
     if is_active:
+
+        if job.moderation_status == "deactivated":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permanently deactivated jobs cannot be reactivated."
+            )
+
+        if job.moderation_status in {"hidden", "pending_reapproval"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This job requires moderation approval before activation."
+            )
 
         recruiter_profile = db.query(RecruiterProfile).filter(
             RecruiterProfile.id == job.recruiter_id
@@ -1414,6 +1451,22 @@ def update_job_status(
                 detail="Recruiter profile not found."
             )
 
+        recruiter = db.query(User).filter(
+            User.id == recruiter_profile.user_id
+        ).first()
+
+        if not recruiter:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recruiter not found."
+            )
+
+        if recruiter.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Blocked recruiters cannot activate jobs."
+            )
+
         company = None
 
         if recruiter_profile.company_id:
@@ -1423,7 +1476,7 @@ def update_job_status(
 
         if company is None:
             company = db.query(Company).filter(
-                Company.admin_user_id == recruiter_profile.user_id
+                Company.admin_user_id == recruiter.id
             ).first()
 
         if not company:
@@ -1451,7 +1504,241 @@ def update_job_status(
         ),
         "job_id": job.id,
         "title": job.title,
-        "is_active": job.is_active
+        "is_active": job.is_active,
+        "moderation_status": job.moderation_status
+    }
+
+
+# --------------------------------------------------
+# JOB REAPPROVAL REQUESTS — ADMIN REVIEW
+# --------------------------------------------------
+
+@router.get("/job-reapproval-requests")
+def get_job_reapproval_requests(
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Return job reapproval requests with job and recruiter details."""
+
+    requests = (
+        db.query(JobReapprovalRequest)
+        .order_by(JobReapprovalRequest.created_at.desc())
+        .all()
+    )
+
+    results = []
+
+    for request in requests:
+        job = db.query(Job).filter(
+            Job.id == request.job_id
+        ).first()
+
+        recruiter_profile = db.query(RecruiterProfile).filter(
+            RecruiterProfile.id == request.recruiter_id
+        ).first()
+
+        if not job or not recruiter_profile:
+            continue
+
+        recruiter = db.query(User).filter(
+            User.id == recruiter_profile.user_id
+        ).first()
+
+        if not recruiter:
+            continue
+
+        company = None
+
+        if recruiter_profile.company_id:
+            company = db.query(Company).filter(
+                Company.id == recruiter_profile.company_id
+            ).first()
+
+        if company is None:
+            company = db.query(Company).filter(
+                Company.admin_user_id == recruiter.id
+            ).first()
+
+        results.append({
+            "id": request.id,
+            "job_id": request.job_id,
+            "recruiter_id": request.recruiter_id,
+            "status": request.status,
+            "recruiter_message": request.recruiter_message,
+            "admin_notes": request.admin_notes,
+            "created_at": request.created_at,
+            "reviewed_at": request.reviewed_at,
+            "reviewed_by": request.reviewed_by,
+
+            "job": {
+                "id": job.id,
+                "title": job.title,
+                "location": job.location,
+                "job_type": job.job_type,
+                "is_active": job.is_active,
+                "moderation_status": job.moderation_status,
+                "moderation_reason": job.moderation_reason,
+            },
+
+            "recruiter": {
+                "id": recruiter.id,
+                "name": recruiter.name,
+                "email": recruiter.email,
+                "is_blocked": recruiter.is_blocked,
+                "blocked_reason": recruiter.blocked_reason,
+            },
+
+            "company": {
+                "id": company.id,
+                "name": company.name,
+                "verification_status": company.verification_status,
+            } if company else None,
+        })
+
+    return results
+
+
+# --------------------------------------------------
+# APPROVE OR REJECT JOB REAPPROVAL REQUEST
+# --------------------------------------------------
+
+@router.put("/job-reapproval-requests/{request_id}/review")
+def review_job_reapproval_request(
+    request_id: int,
+    review_data: JobReapprovalReview,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+):
+    """Approve or reject a recruiter's job reapproval request."""
+
+    request = (
+        db.query(JobReapprovalRequest)
+        .filter(JobReapprovalRequest.id == request_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job reapproval request not found.",
+        )
+
+    if request.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reapproval request has already been reviewed.",
+        )
+
+    job = (
+        db.query(Job)
+        .filter(Job.id == request.job_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Associated job not found.",
+        )
+
+    if job.moderation_status != "pending_reapproval":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This job is not awaiting reapproval.",
+        )
+
+    recruiter_profile = db.query(RecruiterProfile).filter(
+        RecruiterProfile.id == request.recruiter_id
+    ).first()
+
+    if not recruiter_profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter profile not found.",
+        )
+
+    recruiter = db.query(User).filter(
+        User.id == recruiter_profile.user_id
+    ).first()
+
+    if not recruiter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter account not found.",
+        )
+
+    if review_data.status == "approved":
+
+        if recruiter.is_blocked:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This recruiter is blocked. The job cannot be approved.",
+            )
+
+        company = None
+
+        if recruiter_profile.company_id:
+            company = db.query(Company).filter(
+                Company.id == recruiter_profile.company_id
+            ).first()
+
+        if company is None:
+            company = db.query(Company).filter(
+                Company.admin_user_id == recruiter.id
+            ).first()
+
+        if not company:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The recruiter's company could not be found.",
+            )
+
+        if company.verification_status != "verified":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="The recruiter's company is not verified.",
+            )
+
+        # Remove the moderation restriction.
+        # Preserve job.is_active as it currently is.
+        job.moderation_status = "normal"
+        job.moderation_reason = None
+
+        message = "Job reapproval request approved successfully."
+
+    else:
+        # Keep the job hidden after rejection.
+        job.moderation_status = "hidden"
+
+        message = "Job reapproval request rejected."
+
+    request.status = review_data.status
+    request.admin_notes = (
+        review_data.admin_notes.strip()
+        if review_data.admin_notes
+        else None
+    )
+    request.reviewed_by = admin.id
+    request.reviewed_at = datetime.utcnow()
+
+    job.moderated_at = datetime.utcnow()
+    job.moderated_by = admin.id
+
+    db.commit()
+    db.refresh(request)
+    db.refresh(job)
+
+    return {
+        "message": message,
+        "request_id": request.id,
+        "job_id": job.id,
+        "request_status": request.status,
+        "moderation_status": job.moderation_status,
+        "is_active": job.is_active,
+        "admin_notes": request.admin_notes,
+        "reviewed_at": request.reviewed_at,
     }
 
 
@@ -1726,3 +2013,178 @@ def view_application_resume(
         filename=file_path.name,
         content_disposition_type="inline",
     )
+
+
+
+# --------------------------------------------------
+# BLOCK RECRUITER
+# --------------------------------------------------
+
+@router.put("/recruiters/{recruiter_id}/block")
+def block_recruiter(
+    recruiter_id: int,
+    reason: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Block a recruiter from posting and displaying jobs."""
+
+    recruiter = db.query(User).filter(
+        User.id == recruiter_id,
+        User.role == "recruiter"
+    ).with_for_update().first()
+
+    if not recruiter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter not found."
+        )
+
+    if recruiter.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Recruiter is already blocked."
+        )
+
+    normalized_reason = reason.strip()
+
+    if not normalized_reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A blocking reason is required."
+        )
+
+    recruiter.is_blocked = True
+    recruiter.blocked_reason = normalized_reason
+    recruiter.blocked_at = datetime.utcnow()
+    recruiter.blocked_by = admin.id
+
+    db.commit()
+    db.refresh(recruiter)
+
+    return {
+        "message": "Recruiter blocked successfully.",
+        "recruiter_id": recruiter.id,
+        "is_blocked": recruiter.is_blocked,
+        "blocked_reason": recruiter.blocked_reason,
+        "blocked_at": recruiter.blocked_at
+    }
+
+
+# --------------------------------------------------
+# UNBLOCK RECRUITER
+# --------------------------------------------------
+
+@router.put("/recruiters/{recruiter_id}/unblock")
+def unblock_recruiter(
+    recruiter_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """Restore a recruiter's ability to post jobs."""
+
+    recruiter = db.query(User).filter(
+        User.id == recruiter_id,
+        User.role == "recruiter"
+    ).with_for_update().first()
+
+    if not recruiter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Recruiter not found."
+        )
+
+    if not recruiter.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Recruiter is not currently blocked."
+        )
+
+    recruiter.is_blocked = False
+    recruiter.blocked_reason = None
+    recruiter.blocked_at = None
+    recruiter.blocked_by = None
+
+    db.commit()
+    db.refresh(recruiter)
+
+    return {
+        "message": "Recruiter unblocked successfully.",
+        "recruiter_id": recruiter.id,
+        "is_blocked": recruiter.is_blocked
+    }
+
+
+# --------------------------------------------------
+# HIDE OR PERMANENTLY DEACTIVATE JOB
+# --------------------------------------------------
+
+@router.put("/jobs/{job_id}/moderation")
+def moderate_job(
+    job_id: int,
+    moderation_status: str = Body(...),
+    reason: str = Body(...),
+    db: Session = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+):
+    """
+    Temporarily hide or permanently deactivate a job.
+
+    Supported statuses:
+    - hidden
+    - deactivated
+    """
+
+    if moderation_status not in {"hidden", "deactivated"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Moderation status must be hidden or deactivated."
+        )
+
+    normalized_reason = reason.strip()
+
+    if not normalized_reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A moderation reason is required."
+        )
+
+    job = db.query(Job).filter(
+        Job.id == job_id
+    ).with_for_update().first()
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found."
+        )
+
+    if job.moderation_status == "deactivated":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This job has already been permanently deactivated."
+        )
+
+    job.moderation_status = moderation_status
+    job.moderation_reason = normalized_reason
+    job.moderated_at = datetime.utcnow()
+    job.moderated_by = admin.id
+
+    if moderation_status == "deactivated":
+        job.is_active = False
+
+    db.commit()
+    db.refresh(job)
+
+    return {
+        "message": (
+            "Job hidden successfully."
+            if moderation_status == "hidden"
+            else "Job permanently deactivated successfully."
+        ),
+        "job_id": job.id,
+        "moderation_status": job.moderation_status,
+        "moderation_reason": job.moderation_reason,
+        "is_active": job.is_active,
+        "moderated_at": job.moderated_at
+    }

@@ -1,7 +1,13 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Boolean
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Boolean,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -62,6 +68,28 @@ class User(Base):
     role: Mapped[str] = mapped_column(
         String(20),
         nullable=False
+    )
+
+    # Recruiter blocking
+    is_blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    blocked_reason: Mapped[str | None] = mapped_column(
+        String(1000),
+        nullable=True
+    )
+
+    blocked_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True
+    )
+
+    blocked_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
