@@ -25,6 +25,13 @@ interface RecruiterProfile {
   company: Company | null;
 }
 
+interface RecruiterAccessStatus {
+  is_restricted: boolean;
+  blocked_type: "individual" | "primary_recruiter" | null;
+  reason: string | null;
+  message: string;
+}
+
 function isNotFound(error: unknown): boolean {
   if (
     error &&
@@ -52,6 +59,8 @@ export default function CreateJobPage() {
   const [accessLoading, setAccessLoading] = useState(true);
   const [companyVerified, setCompanyVerified] = useState(false);
   const [accessError, setAccessError] = useState("");
+  const [accessStatus, setAccessStatus] =
+    useState<RecruiterAccessStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +82,23 @@ export default function CreateJobPage() {
           return;
         }
 
-        // 2. Check whether the recruiter is a Company Admin.
+        // 2. Check whether this recruiter is blocked individually
+        // or through the company's primary recruiter.
+        const status: RecruiterAccessStatus = await apiRequest(
+          "/jobs/recruiter-access-status"
+        );
+
+        if (cancelled) return;
+
+        setAccessStatus(status);
+
+        if (status.is_restricted) {
+          setCompanyVerified(false);
+          setAccessError(status.message);
+          return;
+        }
+
+        // 3. Check whether the recruiter is a Company Admin.
         let company: Company | null = null;
 
         try {
@@ -86,7 +111,7 @@ export default function CreateJobPage() {
           }
         }
 
-        // 3. If not a Company Admin, check Secondary Recruiter profile.
+        // 4. If not a Company Admin, check Secondary Recruiter profile.
         if (!company) {
           let profile: RecruiterProfile | null = null;
 
@@ -103,7 +128,7 @@ export default function CreateJobPage() {
 
         if (cancelled) return;
 
-        // 4. Block recruiters without an associated company.
+        // 5. Block recruiters without an associated company.
         if (!company) {
           setCompanyVerified(false);
           setAccessError(
@@ -112,7 +137,7 @@ export default function CreateJobPage() {
           return;
         }
 
-        // 5. Allow job creation only for verified companies.
+        // 6. Allow job creation only for verified companies.
         if (company.verification_status !== "verified") {
           setCompanyVerified(false);
           setAccessError(
@@ -198,9 +223,15 @@ export default function CreateJobPage() {
     event.preventDefault();
 
     // Additional frontend protection.
-    if (!companyVerified || accessLoading) {
+    if (
+      !companyVerified ||
+      accessLoading ||
+      accessStatus?.is_restricted
+    ) {
       setError(
-        "Your company must be verified before you can post a job."
+        accessStatus?.is_restricted
+          ? accessStatus.message
+          : "Your company must be verified before you can post a job."
       );
       return;
     }
@@ -287,6 +318,51 @@ export default function CreateJobPage() {
           <p className="text-slate-300">
             Checking company verification...
           </p>
+        </div>
+      </main>
+    );
+  }
+
+  // --------------------------------------------------
+  // RECRUITER ACCESS RESTRICTED
+  // --------------------------------------------------
+
+  if (accessStatus?.is_restricted) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-4 py-10">
+        <div className="max-w-lg w-full rounded-2xl border border-red-500/30 bg-slate-900 p-8 text-center shadow-xl">
+          <div className="text-5xl mb-5">🚫</div>
+
+          <h1 className="text-2xl font-bold text-red-400">
+            {accessStatus.blocked_type === "individual"
+              ? "Recruiter Account Blocked"
+              : "Company Recruitment Access Restricted"}
+          </h1>
+
+          <p className="mt-4 text-slate-300">
+            {accessStatus.message}
+          </p>
+
+          <div className="mt-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-left">
+            <p className="text-sm font-semibold text-red-300">
+              Reason for restriction
+            </p>
+            <p className="mt-2 text-sm text-slate-300">
+              {accessStatus.reason || "No reason provided."}
+            </p>
+          </div>
+
+          <p className="mt-4 text-sm text-slate-400">
+            Job creation is unavailable until this restriction is lifted.
+          </p>
+
+          <button
+            type="button"
+            onClick={() => router.push("/recruiter/dashboard")}
+            className="mt-7 w-full rounded-xl bg-blue-600 hover:bg-blue-500 px-6 py-3 text-sm font-semibold transition"
+          >
+            Back to Recruiter Dashboard
+          </button>
         </div>
       </main>
     );
@@ -729,7 +805,11 @@ export default function CreateJobPage() {
 
             <button
               type="submit"
-              disabled={loading || !companyVerified}
+              disabled={
+                loading ||
+                !companyVerified ||
+                accessStatus?.is_restricted === true
+              }
               className="rounded-xl bg-blue-600 hover:bg-blue-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading && (

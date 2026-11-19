@@ -44,6 +44,13 @@ interface JoinRequest {
     recruiter_email: string;
 }
 
+interface RecruiterAccessStatus {
+    is_restricted: boolean;
+    blocked_type: "individual" | "primary_recruiter" | null;
+    reason: string | null;
+    message: string;
+}
+
 type RecruiterAccess =
     | {
           type: "admin";
@@ -105,6 +112,9 @@ export default function RecruiterDashboardPage() {
     const [reviewingRequestId, setReviewingRequestId] =
         useState<number | null>(null);
 
+    const [accessStatus, setAccessStatus] =
+    useState<RecruiterAccessStatus | null>(null);
+
     // --------------------------------------------------
     // LOAD RECRUITER DASHBOARD
     // --------------------------------------------------
@@ -131,6 +141,19 @@ export default function RecruiterDashboardPage() {
                 if (cancelled) return;
 
                 setUser(userData);
+
+                // Check whether this recruiter has restricted job-management access.
+                try {
+                    const status: RecruiterAccessStatus = await apiRequest(
+                        "/jobs/recruiter-access-status"
+                    );
+
+                    if (!cancelled) {
+                        setAccessStatus(status);
+                    }
+                } catch (accessError) {
+                    console.error("Unable to load recruiter access status:", accessError);
+                }
 
                 // 1. Check whether this recruiter is a Company Admin.
                 let adminCompany: Company | null = null;
@@ -646,6 +669,36 @@ export default function RecruiterDashboardPage() {
                     </p>
                 </section>
 
+                {/* RECRUITER BLOCK / ACCESS RESTRICTION NOTICE */}
+
+                {accessStatus?.is_restricted && (
+                    <section className="mb-10 rounded-2xl border border-red-500/40 bg-red-500/10 p-6">
+                        <h3 className="text-xl font-semibold text-red-400">
+                            {accessStatus.blocked_type === "individual"
+                                ? "Recruiter Account Blocked"
+                                : "Company Recruitment Access Restricted"}
+                        </h3>
+
+                        <p className="mt-2 text-slate-300">
+                            {accessStatus.message}
+                        </p>
+
+                        <div className="mt-4 rounded-lg bg-slate-950/60 p-4">
+                            <p className="text-sm font-semibold text-red-300">
+                                Reason for restriction
+                            </p>
+                            <p className="mt-1 text-sm text-slate-300">
+                                {accessStatus.reason || "No reason provided."}
+                            </p>
+                        </div>
+
+                        <p className="mt-4 text-sm text-slate-400">
+                            You can still access your dashboard, but job-management
+                            actions are restricted until the block is lifted.
+                        </p>
+                    </section>
+                )}
+
                 {/* COMPANY ADMIN */}
 
                 {recruiterAccess.type === "admin" && company && (
@@ -816,19 +869,23 @@ export default function RecruiterDashboardPage() {
                             {/* POST A JOB */}
 
                             <button
-                                onClick={() => {
-                                    if (companyVerified) {
+                               onClick={() => {
+                                    if (companyVerified && !accessStatus?.is_restricted) {
                                         router.push("/recruiter/jobs/create");
                                     }
                                 }}
-                                disabled={!companyVerified}
+                                disabled={
+                                    !companyVerified || accessStatus?.is_restricted === true
+                                }
                                 title={
-                                    companyVerified
-                                        ? "Post a new job"
-                                        : "Company verification approval is required"
+                                    accessStatus?.is_restricted
+                                        ? "Job posting is restricted for this recruiter account"
+                                        : companyVerified
+                                            ? "Post a new job"
+                                            : "Company verification approval is required"
                                 }
                                 className={`min-w-0 min-h-[150px] rounded-2xl border bg-slate-900 p-4 text-left transition flex flex-col ${
-                                    companyVerified
+                                    companyVerified && !accessStatus?.is_restricted
                                         ? "border-slate-800 hover:border-green-500 cursor-pointer"
                                         : "border-slate-800 opacity-50 cursor-not-allowed"
                                 }`}
@@ -842,7 +899,9 @@ export default function RecruiterDashboardPage() {
                                 </h4>
 
                                 <p className="mt-2 text-xs text-slate-400">
-                                    {companyVerified
+                                    {accessStatus?.is_restricted
+                                    ? "Job posting is currently restricted."
+                                    : companyVerified
                                         ? "Create new job opportunities."
                                         : "Available after company verification approval."}
                                 </p>

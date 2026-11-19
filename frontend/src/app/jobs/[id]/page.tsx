@@ -23,9 +23,25 @@ interface Job {
   application_email?: string | null;
 }
 
-/**
- * Displays job details and handles the selected application method.
- */
+type ReportReason =
+  | "fake"
+  | "misleading"
+  | "payment"
+  | "inappropriate"
+  | "duplicate"
+  | "impersonation"
+  | "other";
+
+const reportReasons: { value: ReportReason; label: string }[] = [
+  { value: "fake", label: "Fake or fraudulent job" },
+  { value: "misleading", label: "Misleading job information" },
+  { value: "payment", label: "Requests payment or money" },
+  { value: "inappropriate", label: "Inappropriate content" },
+  { value: "duplicate", label: "Duplicate job posting" },
+  { value: "impersonation", label: "Company or recruiter impersonation" },
+  { value: "other", label: "Other" },
+];
+
 export default function JobDetailsPage() {
   const params = useParams();
   const router = useRouter();
@@ -37,10 +53,16 @@ export default function JobDetailsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  // Report states
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason | "">("");
+  const [reportDescription, setReportDescription] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportSuccess, setReportSuccess] = useState(false);
+  const [hasReported, setHasReported] = useState(false);
+
   useEffect(() => {
-    /**
-     * Fetches the selected job using the authenticated API helper.
-     */
     const fetchJob = async () => {
       try {
         setLoading(true);
@@ -74,13 +96,11 @@ export default function JobDetailsPage() {
     setMessage("");
     setError("");
 
-    // Platform application
     if (job.application_method === "Platform") {
       router.push(`/jobs/${jobId}/apply`);
       return;
     }
 
-    // Email application through Gmail
     if (job.application_method === "Email") {
       if (!job.application_email) {
         setError("The recruiter has not provided an application email.");
@@ -119,7 +139,6 @@ Best regards,
       return;
     }
 
-    // External application
     if (job.application_method === "External") {
       if (!job.application_url) {
         setError("The recruiter has not provided an application URL.");
@@ -140,6 +159,82 @@ Best regards,
       } catch {
         setError("The external application URL is invalid.");
       }
+    }
+  };
+
+  /**
+   * Open the report modal.
+   */
+  const handleOpenReport = () => {
+    setReportError("");
+    setReportSuccess(false);
+    setReportReason("");
+    setReportDescription("");
+    setShowReportModal(true);
+  };
+
+  /**
+   * Submit a job report to the backend.
+   */
+  const handleSubmitReport = async (
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+
+    setReportError("");
+
+    if (!reportReason) {
+      setReportError("Please select a reason for reporting this job.");
+      return;
+    }
+
+    const description = reportDescription.trim();
+
+    if (description.length > 2000) {
+      setReportError("Description cannot exceed 2000 characters.");
+      return;
+    }
+
+    try {
+      setReportSubmitting(true);
+
+      await apiRequest("/job-reports/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          job_id: Number(jobId),
+          reason: reportReason,
+          description: description || null,
+        }),
+      });
+
+      setReportSuccess(true);
+      setHasReported(true);
+      setShowReportModal(false);
+      setReportDescription("");
+      setReportReason("");
+    } catch (err) {
+      console.error("Job report submission error:", err);
+
+      const errorMessage =
+        err instanceof Error ? err.message : "";
+
+      if (
+        errorMessage.toLowerCase().includes("already reported") ||
+        errorMessage.toLowerCase().includes("already reported this job") ||
+        errorMessage.includes("409")
+      ) {
+        setHasReported(true);
+        setReportError("You have already reported this job.");
+      } else {
+        setReportError(
+          errorMessage || "Failed to submit your report. Please try again."
+        );
+      }
+    } finally {
+      setReportSubmitting(false);
     }
   };
 
@@ -322,8 +417,160 @@ Best regards,
               </p>
             )}
           </div>
+
+          {/* Report Job */}
+          <div className="mt-6 border-t border-slate-800 pt-5">
+            {reportSuccess || hasReported ? (
+              <p className="text-center text-sm text-slate-400">
+                You have already submitted a report for this job.
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenReport}
+                className="w-full rounded-xl border border-red-500/40 px-6 py-3 font-medium text-red-400 transition hover:bg-red-500/10 hover:border-red-500"
+              >
+                Report this Job
+              </button>
+            )}
+
+            {reportSuccess && (
+              <p className="mt-3 text-center text-sm text-green-400">
+                Your report has been submitted successfully. Our admin team
+                will review it.
+              </p>
+            )}
+
+            {reportError && !showReportModal && (
+              <p className="mt-3 text-center text-sm text-red-400">
+                {reportError}
+              </p>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Report Job Modal */}
+      {showReportModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !reportSubmitting) {
+              setShowReportModal(false);
+            }
+          }}
+        >
+          <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold">
+                  Report this Job
+                </h2>
+                <p className="mt-2 text-sm text-slate-400">
+                  Help us keep HireSwipe safe by telling us what's wrong.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowReportModal(false)}
+                disabled={reportSubmitting}
+                className="text-slate-400 hover:text-white text-xl disabled:opacity-50"
+                aria-label="Close report modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSubmitReport}
+              className="mt-6 space-y-5"
+            >
+              {/* Reason */}
+              <div>
+                <label
+                  htmlFor="reportReason"
+                  className="mb-2 block text-sm font-medium text-slate-200"
+                >
+                  Reason for reporting
+                </label>
+
+                <select
+                  id="reportReason"
+                  value={reportReason}
+                  onChange={(event) =>
+                    setReportReason(event.target.value as ReportReason | "")
+                  }
+                  required
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-white outline-none focus:border-blue-500"
+                >
+                  <option value="">Select a reason</option>
+
+                  {reportReasons.map((reason) => (
+                    <option key={reason.value} value={reason.value}>
+                      {reason.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label
+                  htmlFor="reportDescription"
+                  className="mb-2 block text-sm font-medium text-slate-200"
+                >
+                  Additional details{" "}
+                  <span className="text-slate-500">(Optional)</span>
+                </label>
+
+                <textarea
+                  id="reportDescription"
+                  value={reportDescription}
+                  onChange={(event) =>
+                    setReportDescription(event.target.value)
+                  }
+                  rows={5}
+                  maxLength={2000}
+                  placeholder="Explain why you think this job should be reviewed..."
+                  className="w-full resize-y rounded-lg border border-slate-700 bg-slate-800 p-4 text-white outline-none placeholder:text-slate-500 focus:border-blue-500"
+                />
+
+                <p className="mt-2 text-right text-xs text-slate-500">
+                  {reportDescription.length}/2000
+                </p>
+              </div>
+
+              {/* Modal error */}
+              {reportError && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                  {reportError}
+                </div>
+              )}
+
+              <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  disabled={reportSubmitting}
+                  className="rounded-lg border border-slate-600 px-5 py-3 text-sm font-semibold text-slate-300 transition hover:bg-slate-800 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={reportSubmitting || !reportReason}
+                  className="rounded-lg bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {reportSubmitting ? "Submitting..." : "Submit Report"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

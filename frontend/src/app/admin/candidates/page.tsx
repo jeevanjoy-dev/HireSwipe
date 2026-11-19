@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,7 +16,6 @@ interface Candidate {
     email_verified: boolean;
     phone_verified: boolean;
     created_at: string;
-
     candidate_profile_id: number | null;
     location: string | null;
     has_resume: boolean;
@@ -271,9 +269,7 @@ export default function CandidatesPage() {
     return (
         <main className="min-h-screen bg-slate-950 text-white">
 
-            {/* -------------------------------------- */}
             {/* NAVIGATION */}
-            {/* -------------------------------------- */}
 
             <nav className="border-b border-slate-800 bg-slate-950">
                 <div className="mx-auto max-w-7xl px-6 py-5 flex justify-between items-center">
@@ -308,9 +304,7 @@ export default function CandidatesPage() {
 
             <div className="mx-auto max-w-7xl px-6 py-10">
 
-                {/* -------------------------------------- */}
                 {/* PAGE HEADER */}
-                {/* -------------------------------------- */}
 
                 <section className="mb-8">
 
@@ -333,22 +327,47 @@ export default function CandidatesPage() {
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-slate-800 bg-slate-900 px-5 py-4">
-                            <p className="text-sm text-slate-400">
-                                Total Candidates
-                            </p>
+                        {/* JOB REPORTS AND CANDIDATE COUNT */}
 
-                            <p className="mt-1 text-2xl font-bold text-blue-400">
-                                {total}
-                            </p>
+                        <div className="flex flex-col gap-3 sm:flex-row">
+
+                            <button
+                                onClick={() => router.push("/admin/job_reports")}
+                                className="flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-left transition hover:border-red-500/60 hover:bg-red-500/20"
+                            >
+                                <span className="text-2xl">🚩</span>
+
+                                <div>
+                                    <p className="font-semibold text-red-400">
+                                        Job Reports
+                                    </p>
+
+                                    <p className="mt-1 text-xs text-slate-400">
+                                        Review candidate reports
+                                    </p>
+                                </div>
+
+                                <span className="ml-2 text-red-400">
+                                    →
+                                </span>
+                            </button>
+
+                            <div className="rounded-xl border border-slate-800 bg-slate-900 px-5 py-4">
+                                <p className="text-sm text-slate-400">
+                                    Total Candidates
+                                </p>
+
+                                <p className="mt-1 text-2xl font-bold text-blue-400">
+                                    {total}
+                                </p>
+                            </div>
+
                         </div>
 
                     </div>
                 </section>
 
-                {/* -------------------------------------- */}
                 {/* SEARCH */}
-                {/* -------------------------------------- */}
 
                 <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
 
@@ -384,9 +403,7 @@ export default function CandidatesPage() {
 
                 </section>
 
-                {/* -------------------------------------- */}
                 {/* ERROR MESSAGE */}
-                {/* -------------------------------------- */}
 
                 {error && (
                     <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-400">
@@ -401,9 +418,7 @@ export default function CandidatesPage() {
                     </div>
                 )}
 
-                {/* -------------------------------------- */}
                 {/* CANDIDATES TABLE */}
-                {/* -------------------------------------- */}
 
                 <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
 
@@ -551,9 +566,7 @@ export default function CandidatesPage() {
                         </div>
                     )}
 
-                    {/* -------------------------------------- */}
                     {/* PAGINATION */}
-                    {/* -------------------------------------- */}
 
                     {!loading && total > 0 && (
 
@@ -593,9 +606,7 @@ export default function CandidatesPage() {
 
                 </section>
 
-                {/* -------------------------------------- */}
                 {/* CANDIDATE DETAILS MODAL */}
-                {/* -------------------------------------- */}
 
                 {(detailsLoading || detailsError || selectedCandidate) && (
 
@@ -856,9 +867,7 @@ export default function CandidatesPage() {
                     </div>
                 )}
 
-                {/* -------------------------------------- */}
                 {/* FOOTER */}
-                {/* -------------------------------------- */}
 
                 <footer className="mt-16 border-t border-slate-800 pt-6 text-center text-sm text-slate-500">
                     HireSwipe • Platform Administration

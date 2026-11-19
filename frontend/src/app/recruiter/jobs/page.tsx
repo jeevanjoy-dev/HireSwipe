@@ -18,6 +18,30 @@ interface Job {
     requirements: string | null;
     is_active: boolean;
     created_at: string;
+
+    moderation_status: string;
+    moderation_reason: string | null;
+    moderated_at: string | null;
+    moderated_by: number | null;
+}
+
+interface ReapprovalRequest {
+    id: number;
+    job_id: number;
+    recruiter_id: number;
+    status: "pending" | "approved" | "rejected";
+    recruiter_message: string | null;
+    admin_notes: string | null;
+    reviewed_by: number | null;
+    reviewed_at: string | null;
+    created_at: string;
+}
+
+interface RecruiterAccessStatus {
+    is_restricted: boolean;
+    blocked_type: "individual" | "primary_recruiter" | null;
+    reason: string | null;
+    message: string;
 }
 
 export default function RecruiterJobsPage() {
@@ -27,6 +51,17 @@ export default function RecruiterJobsPage() {
     const [loading, setLoading] = useState(true);
     const [deletingId, setDeletingId] = useState<number | null>(null);
     const [error, setError] = useState("");
+    const [reapprovalRequests, setReapprovalRequests] = useState<
+    ReapprovalRequest[]>([]);
+
+    const [requestingId, setRequestingId] = useState<number | null>(null);
+    const [requestMessages, setRequestMessages] = useState<
+        Record<number, string>>({});
+    
+    const [accessStatus, setAccessStatus] =
+    useState<RecruiterAccessStatus | null>(null);      
+    
+
 
     useEffect(() => {
         async function loadJobs() {
@@ -34,11 +69,21 @@ export default function RecruiterJobsPage() {
                 setLoading(true);
                 setError("");
 
-                const data: Job[] = await apiRequest("/jobs/my-jobs", {
-                    method: "GET",
-                });
+              const [jobsData, requestsData, accessData] = await Promise.all([
+                    apiRequest("/jobs/my-jobs", {
+                        method: "GET",
+                    }),
+                    apiRequest("/jobs/my-reapproval-requests", {
+                        method: "GET",
+                    }),
+                    apiRequest("/jobs/recruiter-access-status", {
+                        method: "GET",
+                    }),
+                ]);
 
-                setJobs(data);
+                setJobs(jobsData);
+                setReapprovalRequests(requestsData);
+                setAccessStatus(accessData);
             } catch (error) {
                 console.error("Recruiter jobs loading error:", error);
 
@@ -89,6 +134,50 @@ export default function RecruiterJobsPage() {
         }
     }
 
+    async function handleReapprovalRequest(jobId: number) {
+    try {
+        setRequestingId(jobId);
+        setError("");
+
+        const message = requestMessages[jobId]?.trim() || null;
+
+        await apiRequest(`/jobs/${jobId}/reapproval-request`, {
+            method: "POST",
+            body: JSON.stringify({
+                recruiter_message: message,
+            }),
+        });
+
+        // Refresh jobs and reapproval requests.
+        const [jobsData, requestsData] = await Promise.all([
+            apiRequest("/jobs/my-jobs", {
+                method: "GET",
+            }),
+            apiRequest("/jobs/my-reapproval-requests", {
+                method: "GET",
+            }),
+        ]);
+
+        setJobs(jobsData);
+        setReapprovalRequests(requestsData);
+
+        setRequestMessages((current) => ({
+            ...current,
+            [jobId]: "",
+        }));
+    } catch (error) {
+        console.error("Reapproval request error:", error);
+
+        setError(
+            error instanceof Error
+                ? error.message
+                : "Failed to submit reapproval request."
+        );
+    }   finally {
+           setRequestingId(null);
+    }
+  }
+
     // Loading screen.
     if (loading) {
         return (
@@ -127,12 +216,13 @@ export default function RecruiterJobsPage() {
                     </div>
 
                     <button
-                        onClick={() => router.push("/recruiter/jobs/create")}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition"
-                    >
-                        <span className="text-lg leading-none">+</span>
-                        Post New Job
-                    </button>
+                    onClick={() => router.push("/recruiter/jobs/create")}
+                    disabled={accessStatus?.is_restricted === true}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-600/20 transition disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                    <span className="text-lg leading-none">+</span>
+                    Post New Job
+                </button>
                 </div>
 
                 {/* JOB SUMMARY CARDS */}
@@ -199,6 +289,42 @@ export default function RecruiterJobsPage() {
                     </span>
                 </div>
 
+                {/* RECRUITER ACCESS RESTRICTION NOTICE */}
+                {accessStatus?.is_restricted && (
+                    <div className="mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-5">
+                        <div className="flex items-start gap-3">
+                            <span className="text-2xl">🚫</span>
+
+                            <div>
+                                <h3 className="text-lg font-semibold text-red-400">
+                                    {accessStatus.blocked_type === "individual"
+                                        ? "Your Recruiter Account Is Blocked"
+                                        : "Company Job Management Restricted"}
+                                </h3>
+
+                                <p className="text-sm text-slate-300 mt-2">
+                                    {accessStatus.message}
+                                </p>
+
+                                <div className="mt-4 rounded-xl border border-red-500/20 bg-slate-950/50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-red-400 mb-1">
+                                        Reason for restriction
+                                    </p>
+
+                                    <p className="text-sm text-slate-300 whitespace-pre-line">
+                                        {accessStatus.reason || "No reason provided."}
+                                    </p>
+                                </div>
+
+                                <p className="text-xs text-slate-400 mt-3">
+                                    Contact your company administrator or HireSwipe support
+                                    for assistance.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* ERROR NOTIFICATION */}
                 {error && (
                     <div className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -224,7 +350,8 @@ export default function RecruiterJobsPage() {
 
                         <button
                             onClick={() => router.push("/recruiter/jobs/create")}
-                            className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-3 text-sm font-semibold text-white transition shadow-lg shadow-blue-600/20"
+                            disabled={accessStatus?.is_restricted === true}
+                            className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-3 text-sm font-semibold text-white transition shadow-lg shadow-blue-600/20 disabled:cursor-not-allowed disabled:opacity-40"      
                         >
                             + Post a Job
                         </button>
@@ -233,7 +360,12 @@ export default function RecruiterJobsPage() {
 
                     /* JOB CARDS */
                     <div className="grid grid-cols-1 gap-5">
-                        {jobs.map((job) => (
+                        {jobs.map((job) => {
+                        const latestRequest = reapprovalRequests.find(
+                            (request) => request.job_id === job.id
+                        );
+
+                        return (
                             <section
                                 key={job.id}
                                 className="group rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/70 p-5 sm:p-6 shadow-lg hover:border-blue-500/40 transition-all duration-200"
@@ -344,6 +476,129 @@ export default function RecruiterJobsPage() {
                                     </div>
                                 )}
 
+                                {/* JOB MODERATION STATUS */}
+                                <div className="mb-5 rounded-xl border border-slate-700 bg-slate-950/60 p-4">
+                                    <h4 className="text-sm font-semibold text-slate-200 mb-3">
+                                        Admin Moderation
+                                    </h4>
+
+                                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                                        <span className="text-xs text-slate-400">
+                                            Moderation status:
+                                        </span>
+
+                                        <span
+                                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                                                job.moderation_status === "normal"
+                                                    ? "bg-emerald-500/10 text-emerald-400"
+                                                    : job.moderation_status === "hidden"
+                                                    ? "bg-red-500/10 text-red-400"
+                                                    : job.moderation_status === "pending_reapproval"
+                                                    ? "bg-amber-500/10 text-amber-400"
+                                                    : "bg-slate-700 text-slate-300"
+                                            }`}
+                                        >
+                                            {job.moderation_status === "normal"
+                                                ? "Approved"
+                                                : job.moderation_status === "hidden"
+                                                ? "Hidden by Admin"
+                                                : job.moderation_status === "pending_reapproval"
+                                                ? "Pending Reapproval"
+                                                : job.moderation_status === "deactivated"
+                                                ? "Permanently Deactivated"
+                                                : job.moderation_status}
+                                        </span>
+                                    </div>
+
+                                    {job.moderation_reason && (
+                                        <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                                            <p className="text-xs font-semibold text-red-400 mb-1">
+                                                Admin's Moderation Reason
+                                            </p>
+                                            <p className="text-sm text-slate-300 whitespace-pre-line">
+                                                {job.moderation_reason}
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {latestRequest?.status === "pending" && (
+                                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                                            <p className="text-sm font-semibold text-amber-400">
+                                                Reapproval request submitted
+                                            </p>
+                                            <p className="text-xs text-slate-400 mt-1">
+                                                Your request is waiting for admin review.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {latestRequest?.status === "approved" && (
+                                        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 mb-3">
+                                            <p className="text-sm font-semibold text-emerald-400">
+                                                Reapproval request approved
+                                            </p>
+                                            {latestRequest.admin_notes && (
+                                                <p className="text-sm text-slate-300 mt-2 whitespace-pre-line">
+                                                    Admin feedback: {latestRequest.admin_notes}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {latestRequest?.status === "rejected" && (
+                                        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 mb-3">
+                                            <p className="text-sm font-semibold text-red-400">
+                                                Reapproval request rejected
+                                            </p>
+                                            {latestRequest.admin_notes && (
+                                                <p className="text-sm text-slate-300 mt-2 whitespace-pre-line">
+                                                    Admin feedback: {latestRequest.admin_notes}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+
+                                        {job.moderation_status === "hidden" &&
+                                            !accessStatus?.is_restricted && (
+                                        <div className="mt-4 border-t border-slate-800 pt-4">
+                                            <label className="block text-sm font-medium text-slate-300 mb-2">
+                                                Message to Admin (Optional)
+                                            </label>
+
+                                            <textarea
+                                                value={requestMessages[job.id] || ""}
+                                                onChange={(e) =>
+                                                    setRequestMessages((current) => ({
+                                                        ...current,
+                                                        [job.id]: e.target.value,
+                                                    }))
+                                                }
+                                                placeholder="Explain the corrections you have made..."
+                                                rows={3}
+                                                maxLength={2000}
+                                                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                                            />
+
+                                            <button
+                                                onClick={() => handleReapprovalRequest(job.id)}
+                                                disabled={requestingId === job.id}
+                                                className="mt-3 rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {requestingId === job.id
+                                                    ? "Submitting..."
+                                                    : "Request Reapproval"}
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {job.moderation_status === "deactivated" && (
+                                        <p className="text-xs text-slate-400 mt-2">
+                                            This job has been permanently deactivated and cannot be
+                                            submitted for reapproval.
+                                        </p>
+                                    )}
+                                </div>
+
                                 {/* JOB ACTION BUTTONS */}
                                 <div className="flex flex-wrap gap-3 border-t border-slate-800 pt-5">
 
@@ -352,7 +607,8 @@ export default function RecruiterJobsPage() {
                                         onClick={() =>
                                             router.push(`/recruiter/jobs/${job.id}/edit`)
                                         }
-                                        className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition"
+                                        disabled={accessStatus?.is_restricted === true}
+                                        className="rounded-xl bg-blue-600 hover:bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         Edit Job
                                     </button>
@@ -360,7 +616,8 @@ export default function RecruiterJobsPage() {
                                     {/* DELETE JOB */}
                                     <button
                                         onClick={() => handleDelete(job.id)}
-                                        disabled={deletingId === job.id}
+                                        disabled={deletingId === job.id || accessStatus?.is_restricted === true}
+
                                         className="rounded-xl border border-red-500/20 bg-red-500/10 px-5 py-2.5 text-sm font-medium text-red-400 hover:bg-red-500/20 transition disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         {deletingId === job.id
@@ -370,7 +627,8 @@ export default function RecruiterJobsPage() {
 
                                 </div>
                             </section>
-                        ))}
+                          );
+                        })}
                     </div>
                 )}
 

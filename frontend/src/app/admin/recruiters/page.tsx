@@ -35,6 +35,10 @@ interface Recruiter {
 
     recruiter_type: RecruiterType;
     company: RecruiterCompany | null;
+
+    is_blocked: boolean;
+    blocked_reason: string | null;
+    blocked_at: string | null;
 }
 
 interface RecruiterDetails extends Recruiter {
@@ -91,12 +95,20 @@ export default function RecruitersManagementPage() {
     const [search, setSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState("all");
     const [emailFilter, setEmailFilter] = useState("all");
+    const [accountFilter, setAccountFilter] = useState("all");
 
     const [selectedRecruiter, setSelectedRecruiter] =
         useState<RecruiterDetails | null>(null);
 
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [detailsError, setDetailsError] = useState("");
+
+    // Moderation states
+    const [blockReason, setBlockReason] = useState("");
+    const [showBlockForm, setShowBlockForm] = useState(false);
+    const [blockLoading, setBlockLoading] = useState(false);
+    const [blockError, setBlockError] = useState("");
+    const [blockSuccess, setBlockSuccess] = useState("");
 
     // --------------------------------------------------
     // LOAD RECRUITERS
@@ -157,9 +169,25 @@ export default function RecruitersManagementPage() {
                 (emailFilter === "verified" && recruiter.email_verified) ||
                 (emailFilter === "unverified" && !recruiter.email_verified);
 
-            return matchesSearch && matchesType && matchesEmail;
+            const matchesAccount =
+                accountFilter === "all" ||
+                (accountFilter === "blocked" && recruiter.is_blocked) ||
+                (accountFilter === "active" && !recruiter.is_blocked);
+
+            return (
+                matchesSearch &&
+                matchesType &&
+                matchesEmail &&
+                matchesAccount
+            );
         });
-    }, [recruiters, search, typeFilter, emailFilter]);
+    }, [
+        recruiters,
+        search,
+        typeFilter,
+        emailFilter,
+        accountFilter,
+    ]);
 
     // --------------------------------------------------
     // SUMMARY STATISTICS
@@ -181,6 +209,10 @@ export default function RecruitersManagementPage() {
             r.recruiter_type === "pending"
     ).length;
 
+    const blockedRecruiters = recruiters.filter(
+        (r) => r.is_blocked
+    ).length;
+
     // --------------------------------------------------
     // VIEW RECRUITER DETAILS
     // --------------------------------------------------
@@ -190,6 +222,11 @@ export default function RecruitersManagementPage() {
             setSelectedRecruiter(null);
             setDetailsLoading(true);
             setDetailsError("");
+
+            setBlockError("");
+            setBlockSuccess("");
+            setBlockReason("");
+            setShowBlockForm(false);
 
             const details = await apiRequest<RecruiterDetails>(
                 `/admin/recruiters/${recruiterId}`
@@ -204,6 +241,84 @@ export default function RecruitersManagementPage() {
             );
         } finally {
             setDetailsLoading(false);
+        }
+    }
+
+    // --------------------------------------------------
+    // BLOCK / UNBLOCK RECRUITER
+    // --------------------------------------------------
+
+    async function handleRecruiterBlock() {
+        if (!selectedRecruiter || blockLoading) return;
+
+        const recruiterId = selectedRecruiter.id;
+        const isCurrentlyBlocked = selectedRecruiter.is_blocked;
+
+        if (!isCurrentlyBlocked && !blockReason.trim()) {
+            setBlockError("Please provide a reason for blocking.");
+            return;
+        }
+
+        try {
+            setBlockLoading(true);
+            setBlockError("");
+            setBlockSuccess("");
+
+            if (isCurrentlyBlocked) {
+                await apiRequest(
+                    `/admin/recruiters/${recruiterId}/unblock`,
+                    {
+                        method: "PUT",
+                    }
+                );
+
+                setBlockSuccess("Recruiter unblocked successfully.");
+            } else {
+                await apiRequest(
+                    `/admin/recruiters/${recruiterId}/block`,
+                    {
+                        method: "PUT",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            reason: blockReason.trim(),
+                        }),
+                    }
+                );
+
+                setBlockSuccess("Recruiter blocked successfully.");
+            }
+
+            // Refresh the table without leaving the modal.
+            const updatedRecruiters = await apiRequest<Recruiter[]>(
+                "/admin/recruiters"
+            );
+
+            setRecruiters(
+                Array.isArray(updatedRecruiters)
+                    ? updatedRecruiters
+                    : []
+            );
+
+            // Refresh selected recruiter details.
+            const updatedDetails = await apiRequest<RecruiterDetails>(
+                `/admin/recruiters/${recruiterId}`
+            );
+
+            setSelectedRecruiter(updatedDetails);
+
+            setBlockReason("");
+            setShowBlockForm(false);
+
+        } catch (err) {
+            setBlockError(
+                err instanceof Error
+                    ? err.message
+                    : "Unable to update recruiter status."
+            );
+        } finally {
+            setBlockLoading(false);
         }
     }
 
@@ -298,7 +413,7 @@ export default function RecruitersManagementPage() {
 
                 {/* SUMMARY CARDS */}
 
-                <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+                <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5 mb-8">
 
                     <SummaryCard
                         title="Total Recruiters"
@@ -328,6 +443,13 @@ export default function RecruitersManagementPage() {
                         color="amber"
                     />
 
+                    <SummaryCard
+                        title="Blocked Recruiters"
+                        value={blockedRecruiters}
+                        icon="🚫"
+                        color="red"
+                    />
+
                 </section>
 
                 {/* RECRUITER LIST */}
@@ -351,7 +473,7 @@ export default function RecruitersManagementPage() {
 
                         {/* SEARCH AND FILTERS */}
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
 
                             <input
                                 type="text"
@@ -383,6 +505,16 @@ export default function RecruitersManagementPage() {
                                 <option value="unverified">Email Not Verified</option>
                             </select>
 
+                            <select
+                                value={accountFilter}
+                                onChange={(e) => setAccountFilter(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm outline-none focus:border-blue-500"
+                            >
+                                <option value="all">All Account Statuses</option>
+                                <option value="active">Active</option>
+                                <option value="blocked">Blocked</option>
+                            </select>
+
                         </div>
                     </div>
 
@@ -390,7 +522,7 @@ export default function RecruitersManagementPage() {
 
                     <div className="overflow-x-auto">
 
-                        <table className="w-full text-left min-w-[850px]">
+                        <table className="w-full text-left min-w-[950px]">
 
                             <thead className="bg-slate-950/70 text-slate-400 text-xs uppercase">
                                 <tr>
@@ -398,6 +530,7 @@ export default function RecruitersManagementPage() {
                                     <th className="px-6 py-4">Company</th>
                                     <th className="px-6 py-4">Recruiter Type</th>
                                     <th className="px-6 py-4">Email Status</th>
+                                    <th className="px-6 py-4">Account Status</th>
                                     <th className="px-6 py-4">Action</th>
                                 </tr>
                             </thead>
@@ -479,6 +612,27 @@ export default function RecruitersManagementPage() {
                                             )}
                                         </td>
 
+                                        {/* ACCOUNT STATUS */}
+
+                                        <td className="px-6 py-5">
+                                            {recruiter.is_blocked ? (
+                                                <div>
+                                                    <span className="px-3 py-1.5 rounded-full border border-red-500/20 bg-red-500/10 text-red-400 text-xs font-medium">
+                                                        Blocked
+                                                    </span>
+                                                    {recruiter.blocked_reason && (
+                                                        <p className="text-xs text-slate-500 mt-2 max-w-[180px] truncate">
+                                                            {recruiter.blocked_reason}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <span className="px-3 py-1.5 rounded-full border border-green-500/20 bg-green-500/10 text-green-400 text-xs font-medium">
+                                                    Active
+                                                </span>
+                                            )}
+                                        </td>
+
                                         {/* ACTION */}
 
                                         <td className="px-6 py-5">
@@ -497,7 +651,7 @@ export default function RecruitersManagementPage() {
                                 {filteredRecruiters.length === 0 && (
                                     <tr>
                                         <td
-                                            colSpan={5}
+                                            colSpan={6}
                                             className="text-center py-12 text-slate-500"
                                         >
                                             No recruiters found matching your filters.
@@ -529,6 +683,10 @@ export default function RecruitersManagementPage() {
                                 onClick={() => {
                                     setSelectedRecruiter(null);
                                     setDetailsError("");
+                                    setBlockError("");
+                                    setBlockSuccess("");
+                                    setShowBlockForm(false);
+                                    setBlockReason("");
                                 }}
                                 className="text-slate-400 hover:text-white text-2xl"
                             >
@@ -570,9 +728,21 @@ export default function RecruitersManagementPage() {
                                                 {selectedRecruiter.email}
                                             </p>
 
-                                            <span className={`inline-block mt-2 px-3 py-1 rounded-full border text-xs ${recruiterTypeStyle(selectedRecruiter.recruiter_type)}`}>
-                                                {recruiterTypeLabel(selectedRecruiter.recruiter_type)}
-                                            </span>
+                                            <div className="flex flex-wrap gap-2 mt-2">
+                                                <span className={`px-3 py-1 rounded-full border text-xs ${recruiterTypeStyle(selectedRecruiter.recruiter_type)}`}>
+                                                    {recruiterTypeLabel(selectedRecruiter.recruiter_type)}
+                                                </span>
+
+                                                {selectedRecruiter.is_blocked ? (
+                                                    <span className="px-3 py-1 rounded-full border border-red-500/20 bg-red-500/10 text-red-400 text-xs">
+                                                        Blocked
+                                                    </span>
+                                                ) : (
+                                                    <span className="px-3 py-1 rounded-full border border-green-500/20 bg-green-500/10 text-green-400 text-xs">
+                                                        Active
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
 
                                     </div>
@@ -592,6 +762,11 @@ export default function RecruitersManagementPage() {
                                         />
 
                                         <DetailRow
+                                            label="Account Status"
+                                            value={selectedRecruiter.is_blocked ? "Blocked" : "Active"}
+                                        />
+
+                                        <DetailRow
                                             label="Designation"
                                             value={selectedRecruiter.recruiter_profile?.designation || "Not provided"}
                                         />
@@ -600,6 +775,134 @@ export default function RecruitersManagementPage() {
                                             label="Profile ID"
                                             value={selectedRecruiter.recruiter_profile?.id ?? "No profile"}
                                         />
+
+                                    </DetailSection>
+
+                                    {/* BLOCKING INFORMATION */}
+
+                                    {selectedRecruiter.is_blocked && (
+                                        <DetailSection title="Blocking Information">
+
+                                            <DetailRow
+                                                label="Blocking Reason"
+                                                value={selectedRecruiter.blocked_reason || "Not provided"}
+                                            />
+
+                                            <DetailRow
+                                                label="Blocked At"
+                                                value={
+                                                    selectedRecruiter.blocked_at
+                                                        ? new Date(selectedRecruiter.blocked_at).toLocaleString()
+                                                        : "Not available"
+                                                }
+                                            />
+
+                                        </DetailSection>
+                                    )}
+
+                                    {/* RECRUITER MODERATION */}
+
+                                    <DetailSection title="Recruiter Moderation">
+
+                                        {blockError && (
+                                            <div className="p-3 text-sm text-red-400 bg-red-500/10 rounded-lg mb-3">
+                                                {blockError}
+                                            </div>
+                                        )}
+
+                                        {blockSuccess && (
+                                            <div className="p-3 text-sm text-green-400 bg-green-500/10 rounded-lg mb-3">
+                                                {blockSuccess}
+                                            </div>
+                                        )}
+
+                                        {selectedRecruiter.is_blocked ? (
+                                            <div className="space-y-4">
+                                                <p className="text-sm text-slate-400">
+                                                    This recruiter is currently blocked.
+                                                    Their jobs are hidden from candidates,
+                                                    and they cannot create or edit jobs.
+                                                </p>
+
+                                                <button
+                                                    onClick={handleRecruiterBlock}
+                                                    disabled={blockLoading}
+                                                    className="w-full px-4 py-3 rounded-lg bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 disabled:opacity-50 transition"
+                                                >
+                                                    {blockLoading
+                                                        ? "Please wait..."
+                                                        : "Unblock Recruiter"}
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-4">
+
+                                                <p className="text-sm text-slate-400">
+                                                    Blocking this recruiter prevents
+                                                    them from creating or editing jobs
+                                                    and hides their jobs from candidates.
+                                                </p>
+
+                                                {!showBlockForm ? (
+                                                    <button
+                                                        onClick={() => {
+                                                            setShowBlockForm(true);
+                                                            setBlockError("");
+                                                            setBlockSuccess("");
+                                                        }}
+                                                        className="w-full px-4 py-3 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition"
+                                                    >
+                                                        Block Recruiter
+                                                    </button>
+                                                ) : (
+                                                    <div className="space-y-3">
+
+                                                        <label className="block text-sm text-slate-300">
+                                                            Reason for blocking
+                                                        </label>
+
+                                                        <textarea
+                                                            value={blockReason}
+                                                            onChange={(e) => setBlockReason(e.target.value)}
+                                                            placeholder="Enter the reason for blocking this recruiter..."
+                                                            maxLength={1000}
+                                                            rows={4}
+                                                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm outline-none focus:border-red-500 resize-y"
+                                                        />
+
+                                                        <p className="text-xs text-slate-500 text-right">
+                                                            {blockReason.length}/1000
+                                                        </p>
+
+                                                        <div className="flex flex-wrap gap-3">
+
+                                                            <button
+                                                                onClick={handleRecruiterBlock}
+                                                                disabled={blockLoading || !blockReason.trim()}
+                                                                className="flex-1 px-4 py-3 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                                            >
+                                                                {blockLoading
+                                                                    ? "Blocking..."
+                                                                    : "Confirm Block"}
+                                                            </button>
+
+                                                            <button
+                                                                onClick={() => {
+                                                                    setShowBlockForm(false);
+                                                                    setBlockReason("");
+                                                                    setBlockError("");
+                                                                }}
+                                                                disabled={blockLoading}
+                                                                className="px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 transition"
+                                                            >
+                                                                Cancel
+                                                            </button>
+
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                     </DetailSection>
 
@@ -655,6 +958,10 @@ export default function RecruitersManagementPage() {
                                 onClick={() => {
                                     setSelectedRecruiter(null);
                                     setDetailsError("");
+                                    setBlockError("");
+                                    setBlockSuccess("");
+                                    setShowBlockForm(false);
+                                    setBlockReason("");
                                 }}
                                 className="px-5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 transition"
                             >
@@ -683,13 +990,14 @@ function SummaryCard({
     title: string;
     value: number;
     icon: string;
-    color: "blue" | "purple" | "green" | "amber";
+    color: "blue" | "purple" | "green" | "amber" | "red";
 }) {
     const colors = {
         blue: "border-blue-500/20 bg-blue-500/5",
         purple: "border-purple-500/20 bg-purple-500/5",
         green: "border-green-500/20 bg-green-500/5",
         amber: "border-amber-500/20 bg-amber-500/5",
+        red: "border-red-500/20 bg-red-500/5",
     };
 
     return (

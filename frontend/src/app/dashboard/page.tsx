@@ -32,13 +32,13 @@ export default function CandidateDashboardPage() {
                 const userData = await apiRequest("/auth/me") as User;
 
                 if (userData.role !== "candidate") {
-                if (userData.role === "recruiter") {
-                    router.replace("/recruiter/dashboard");
-                } else {
-                    router.replace("/dashboard");
+                    if (userData.role === "recruiter") {
+                        router.replace("/recruiter/dashboard");
+                    } else {
+                        router.replace("/dashboard");
+                    }
+                    return;
                 }
-                return;
-            }
 
                 setUser(userData);
             } catch (err) {
@@ -150,11 +150,12 @@ export default function CandidateDashboardPage() {
                         Career Management
                     </h3>
 
-                    <div className="grid gap-5 md:grid-cols-3">
+                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
 
+                        {/* BROWSE JOBS */}
                         <button
                             onClick={() => router.push("/jobs")}
-                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-blue-500"
+                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left transition hover:border-blue-500"
                         >
                             <div className="text-3xl mb-4">💼</div>
 
@@ -167,9 +168,10 @@ export default function CandidateDashboardPage() {
                             </p>
                         </button>
 
+                        {/* MY APPLICATIONS */}
                         <button
                             onClick={() => router.push("/applications")}
-                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-green-500"
+                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left transition hover:border-green-500"
                         >
                             <div className="text-3xl mb-4">📋</div>
 
@@ -182,9 +184,10 @@ export default function CandidateDashboardPage() {
                             </p>
                         </button>
 
+                        {/* MY PROFILE */}
                         <button
                             onClick={() => router.push("/profile")}
-                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left hover:border-purple-500"
+                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left transition hover:border-purple-500"
                         >
                             <div className="text-3xl mb-4">👤</div>
 
@@ -194,6 +197,22 @@ export default function CandidateDashboardPage() {
 
                             <p className="mt-2 text-sm text-slate-400">
                                 View and manage your candidate profile.
+                            </p>
+                        </button>
+
+                        {/* MY REPORTS */}
+                        <button
+                            onClick={() => router.push("/my_reports")}
+                            className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-left transition hover:border-yellow-500"
+                        >
+                            <div className="text-3xl mb-4">🚩</div>
+
+                            <h4 className="text-lg font-semibold">
+                                My Reports
+                            </h4>
+
+                            <p className="mt-2 text-sm text-slate-400">
+                                View reported jobs and track their review status.
                             </p>
                         </button>
 
