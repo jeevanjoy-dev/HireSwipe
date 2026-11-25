@@ -26,7 +26,7 @@ type JobListResponse = {
   jobs: Job[];
 };
 
-const PAGE_SIZE = 2;
+const PAGE_SIZE = 6;
 
 export default function JobsPage() {
   /**
